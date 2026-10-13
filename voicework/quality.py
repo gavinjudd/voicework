@@ -16,7 +16,8 @@ from pathlib import Path
 from .corrections import SNAPSHOT_FIELDS, lesson_fingerprint
 from .evaluation import NEUTRAL_CONTROLS
 from .language import matching_lessons, validate_lesson
-from .learning import validate_context
+from .learning import contextual_preferences, retrieve, validate_context
+from .matching import same_channel
 from .store import text_field
 
 
@@ -64,7 +65,6 @@ def _counts():
 
 def _eligible_preferences(preferences, context, target_id):
     result = []
-    channel = context["channel"].strip().casefold()
     for item in preferences:
         if item.get("id") == target_id or item.get("held_out") or item.get("enabled") is False:
             continue
@@ -74,9 +74,9 @@ def _eligible_preferences(preferences, context, target_id):
         elif item.get("is_prior") is True:
             if item.get("confirmed") is not True:
                 continue
-            if validate_context(item.get("context"))["channel"].casefold() != channel:
+            if not same_channel(validate_context(item.get("context")), context):
                 continue
-        elif validate_context(item.get("context"))["channel"].casefold() != channel:
+        elif not contextual_preferences([item], context):
             continue
         result.append(item)
     return result
@@ -175,8 +175,7 @@ class QualityStore:
         for label, records in (("evidence", evidence), ("common preferences", common_preferences)):
             if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
                 raise ValueError("Quality-check %s must be a list of records" % label)
-        approved = copy.deepcopy([item for item in evidence if item.get("status") == "confirmed" and not item.get("held_out", False)
-                                  and validate_context(item.get("context"))["channel"].casefold() == context["channel"].casefold()][:6])
+        approved = copy.deepcopy(retrieve(evidence, context))
         common = copy.deepcopy(_eligible_preferences(common_preferences, context, lesson_id))
         controls = copy.deepcopy(NEUTRAL_CONTROLS)
         provenance = {

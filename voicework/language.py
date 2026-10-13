@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .learning import validate_context
+from .matching import lesson_context_matches
 from .store import text_field
 
 DIMENSIONS = {"vernacular", "syntax", "diction", "rhythm"}
@@ -34,17 +35,14 @@ def validate_lesson(packet):
 
 
 def matching_lessons(lessons, context):
-    """Match declared conditions exactly; a scenario remains descriptive guidance."""
+    """Match every declared condition, including explicit whole-label aliases."""
     requested = validate_context(context)
     result = []
     for lesson in lessons:
         if lesson.get("enabled") is not True:
             continue
         declared = lesson.get("context", {})
-        if declared.get("channel", "work").strip().casefold() != requested["channel"].strip().casefold():
-            continue
-        if any(declared.get(field, "").strip() and declared[field].strip().casefold() != requested[field].strip().casefold()
-               for field in ("audience", "intent", "relationship", "stakes")):
+        if not lesson_context_matches(declared, requested):
             continue
         result.append(lesson)
     return result

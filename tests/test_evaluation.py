@@ -35,7 +35,7 @@ class EvaluationTests(unittest.TestCase):
 
     def test_same_task_controls_and_filtered_evidence(self):
         provider = RecordingProvider()
-        evidence = [{"id": "approved", "text": "Reviewed style.", "status": "confirmed"},
+        evidence = [{"id": "approved", "text": "Reviewed style.", "status": "confirmed", "context": self.context},
                     {"id": "holdout", "text": "Never supply this.", "status": "confirmed", "held_out": True},
                     {"id": "pending", "status": "pending"}, {"id": "assisted", "status": "assisted"},
                     {"id": "rejected", "status": "rejected"}]

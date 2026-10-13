@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path
 
 from .language import matching_lessons, validate_focus
+from .learning import contextual_preferences, retrieve
+from .matching import same_channel
 
 DEFAULT_MODEL = 'gpt-6-astra'
 OFFLINE_WARNING = 'Offline rehearsal uses simple text rules, not a language model. It does not measure or demonstrate writing fidelity.'
@@ -33,20 +35,19 @@ def _failure_reason(stderr):
     return 'Check the selected Codex executable, model access, network access and login. The CLI failure was not identified as an authentication error.'
 
 
-def _training_samples(evidence):
-    return [s for s in evidence if s.get('status') == 'confirmed' and not s.get('held_out', False)][:6]
+def _training_samples(evidence, context):
+    return retrieve(evidence, context)
 
 
 def _payload(context, evidence, preferences):
-    samples = _training_samples(evidence)
-    channel = str(context.get('channel', 'work')).strip().lower()
+    samples = _training_samples(evidence, context)
     priors = [p for p in preferences if p.get('is_prior') is True and p.get('confirmed') is True
-              and str(p.get('context', {}).get('channel', 'work')).strip().lower() == channel][:12]
+              and same_channel(p.get('context', {}), context)][:12]
     lessons = matching_lessons([p for p in preferences if p.get('is_language_lesson') is True], context)
     return {
         'context': context,
         'authored_examples': [{'id': s['id'], 'text': s['text'][:2400], 'context': s.get('context', {})} for s in samples],
-        'calibration_feedback': [p for p in preferences if not p.get('is_prior') and not p.get('is_language_lesson')][-20:],
+        'calibration_feedback': contextual_preferences([p for p in preferences if not p.get('is_prior') and not p.get('is_language_lesson')], context),
         'language_lessons': [{key: lesson[key] for key in ('id', 'context', 'dimension', 'guidance', 'preferred', 'avoided')} for lesson in lessons],
         'assistant_derived_priors': [{'label': str(p.get('label', 'Prior'))[:200], 'text': str(p.get('text', ''))[:4000],
                                      'context': p.get('context', {}), 'source': str(p.get('source', ''))[:500]} for p in priors],
@@ -120,14 +121,13 @@ class Provider:
         return {'options': options, 'provider': 'codex', 'warnings': result.get('warnings', [])}
 
     def generate_draft(self, context, brief, controls, evidence, preferences):
-        samples = _training_samples(evidence)
+        samples = _training_samples(evidence, context)
         if self.mode == 'offline':
             text = brief.strip()
             structure = controls.get('structure', 'auto')
             if structure == 'auto':
-                for pref in preferences:
-                    if pref.get('is_prior') or pref.get('is_language_lesson'):
-                        continue
+                feedback = [p for p in preferences if not p.get('is_prior') and not p.get('is_language_lesson')]
+                for pref in contextual_preferences(feedback, context):
                     preferred = pref.get('presentation', {}).get('structure')
                     if preferred in ('bullets', 'prose'):
                         structure = preferred

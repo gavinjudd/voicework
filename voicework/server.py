@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .discovery import capabilities as scan_capabilities, discover
 from .learning import build_profile, contextual_preferences, export_markdown, retrieve, validate_context
+from .matching import same_channel
 from .store import Store, text_field
 from .context import PriorStore, infer_context
 from .evaluation import EvaluationStore
@@ -230,8 +231,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _prior_preferences(self, context):
         priors = self.server.priors.list(confirmed_only=True)
-        channel = context.get("channel", "work").strip().casefold()
-        return [{**item, "is_prior": True} for item in priors if item["context"].get("channel", "work").strip().casefold() == channel]
+        return [{**item, "is_prior": True} for item in priors if same_channel(item["context"], context)]
 
     def _language_preferences(self, context):
         return [{**item, "is_language_lesson": True} for item in self.server.language_lessons.matching(context)]

@@ -40,7 +40,7 @@ Presentation is part of voice: paragraphs versus bullets, heading frequency, par
 
 Language lessons make wording teachable directly: **vernacular** covers familiar expressions and register; **syntax** covers sentence construction; **diction** covers word choice; **rhythm** covers pacing and variation in sentence length. Each lesson stores a context, dimension, rule and preferred/avoided phrasing. Enabled matching lessons enter calibrated prompts; exports include all enabled lessons with their declared contexts. They remain distinct from authentic samples, background priors and blinded evaluation records. Focused practice asks the model to vary a selected dimension while preserving meaning; it does not certify that all other dimensions stayed identical.
 
-Lesson matching requires the same channel and case-insensitive exact matches for any audience, intent, relationship or stakes declared on the lesson. Leave those optional conditions blank for a broader rule. Scenario text remains conditional guidance for the model rather than an enforced retrieval filter.
+Lesson matching requires the same channel and whole-label matches for every audience, intent, relationship or stakes condition declared on the lesson. Case/whitespace normalization and a finite field-specific alias vocabulary recognize equivalent wording; custom labels and qualifiers are preserved. Specific requests retrieve only relevant examples and practice feedback, with incompatible audience, relationship and stakes excluded. Leave those optional conditions blank for a broader rule. Scenario text remains conditional guidance for the model rather than an enforced retrieval filter.
 
 ## Prior knowledge and authentic writing
 

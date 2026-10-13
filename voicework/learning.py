@@ -6,6 +6,8 @@ authorship classifier or accuracy score is implied by this module.
 import re
 from collections import Counter
 
+from .matching import explain_context_match
+
 
 CONTEXT_FIELDS = ("channel", "audience", "intent", "stakes", "relationship", "scenario")
 PRESENTATION_FIELDS = ("paragraph_length", "structure", "opening", "signoff", "emoji", "detail")
@@ -45,23 +47,9 @@ def validate_presentation(value):
     return result
 
 
-def _norm(value):
-    return " ".join(str(value or "").lower().split())
-
-
 def _context_score(sample_context, requested):
-    """A declared channel boundary is never silently crossed."""
-    if _norm(sample_context.get("channel", "work")) != _norm(requested.get("channel", "work")):
-        return None
-    score = 1
-    for name, weight in (("audience", 5), ("intent", 5), ("relationship", 4), ("stakes", 2)):
-        wanted, actual = _norm(requested.get(name)), _norm(sample_context.get(name))
-        if wanted and actual:
-            score += weight if wanted == actual else -1
-    wanted_words = set(re.findall(r"\w+", _norm(requested.get("scenario"))))
-    actual_words = set(re.findall(r"\w+", _norm(sample_context.get("scenario"))))
-    score += min(4, len(wanted_words & actual_words))
-    return score
+    match = explain_context_match(sample_context, requested)
+    return match["score"] if match["eligible"] else None
 
 
 def retrieve(samples, context, limit=6):

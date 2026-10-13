@@ -45,12 +45,12 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(state["samples"], [])
         self.assertEqual(state["profile"]["xp"], 0)
-        status, response, _ = self.request("POST", "/api/samples", {"title": "Work note", "text": "Real authored example", "context": {"channel": "work"}})
+        status, response, _ = self.request("POST", "/api/samples", {"title": "Work note", "text": "Real authored example", "context": {"channel": "work", "audience": "teammate"}})
         self.assertEqual(status, 201)
         sample_id = response["sample"]["id"]
         self.assertEqual(response["sample"]["status"], "pending")
         self.assertEqual(self.request("PATCH", "/api/samples/" + sample_id, {"status": "confirmed"})[0], 200)
-        status, response, _ = self.request("POST", "/api/rounds", {"context": {"channel": "work", "scenario": "Thank a teammate"}})
+        status, response, _ = self.request("POST", "/api/rounds", {"context": {"channel": "work", "audience": "teammate", "scenario": "Thank a teammate"}})
         self.assertEqual(status, 201)
         round_ = response["round"]
         self.assertEqual(round_["evidence_ids"], [sample_id])

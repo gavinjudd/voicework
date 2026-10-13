@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .learning import validate_context
+from .learning import retrieve, validate_context
 from .store import text_field
 
 
@@ -97,7 +97,8 @@ class EvaluationStore:
             raise ValueError("Evaluation evidence must be a list of samples")
         if not isinstance(preferences, list) or not all(isinstance(item, dict) for item in preferences):
             raise ValueError("Evaluation preferences must be a list of feedback records")
-        approved = [item for item in evidence if item.get("status") == "confirmed" and not item.get("held_out", False)][:6]
+        approved = copy.deepcopy(retrieve(evidence, context))
+        preferences = copy.deepcopy(preferences)
         model = text_field(getattr(provider, "model", "") or "", "model", 200)
         # No transaction is held while the provider is running. Failed or partial
         # generation cannot leave a case that is eligible for rating.
