@@ -46,6 +46,8 @@ Offline mode is explicitly labeled **rehearsal**. It persists lessons, review an
 
 Contribution points measure participation. They are not an accuracy score. Keep some genuine writing marked as held out; it is excluded from learning evidence and prompt/export examples. A held-out partition alone is not a completed quality evaluation.
 
+The **Voice confidence** bar in Practice, Samples, and Voice profile shows three evidence-readiness checkpoints: save authored evidence or direct teaching, rate a real-model blind voice comparison, and rate at least three distinct brief/context pairs across at least two known channels. These checkpoints describe what has been checked, not a probability that a draft sounds like you. The details show wins, losses, ties, neither votes, and factual flags separately. Offline rehearsal and correction-specific checks do not advance whole-voice comparison checkpoints. Historical comparisons also do not validate later changes to your profile. Use **Check fit** in the confidence panel to open the whole-profile comparison.
+
 ## Finding your writing
 
 Discovery jobs save a queue and directory checkpoints in SQLite. Start with selected local folders, run bounded batches, resume after restarting, or cancel. They skip sensitive directories, hidden files, links, credential-like content and common generated trees; errors and extraction caps are reported. Changed or unreadable sources are skipped with warnings. Start a new scan to cover changed sources. A completed queue means that pass finished, not that every document was readable or the whole computer was covered.

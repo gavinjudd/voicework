@@ -17,6 +17,7 @@ from .discovery_jobs import DiscoveryJobs
 from .language import LanguageLessonStore, validate_focus
 from .corrections import CorrectionStore, CorrectionConflict
 from .quality import QualityStore
+from .confidence import build_voice_confidence
 
 MAX_BODY_BYTES = 8 * 1024 * 1024
 
@@ -243,11 +244,14 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/state":
             samples, rounds, feedback = store.samples(), store.rounds(), store.feedback()
             lessons = self.server.language_lessons.list()
+            evaluations = self.server.evaluations.list_cases()
+            quality_checks = self.server.quality_checks.list_cases()
             return self._json({"samples": samples, "rounds": rounds, "feedback": feedback,
                 "profile": build_profile(samples, feedback, lessons), "language_lessons": lessons,
-                "corrections": self.server.corrections.list(), "quality_checks": self.server.quality_checks.list_cases(),
+                "voice_confidence": build_voice_confidence(samples, feedback, lessons, evaluations, quality_checks),
+                "corrections": self.server.corrections.list(), "quality_checks": quality_checks,
                 "quality_summary": self.server.quality_checks.summary(),
-                "priors": self.server.priors.list(), "evaluations": self.server.evaluations.list_cases(),
+                "priors": self.server.priors.list(), "evaluations": evaluations,
                 "evaluation_summary": self.server.evaluations.summary(), "discovery_jobs": self.server.discovery_jobs.list(),
                 "settings": {"provider": getattr(provider, "mode", "offline"), "model": getattr(provider, "model", None)},
                 "stats": {"pending": sum(s["status"] == "pending" for s in samples),
@@ -425,7 +429,7 @@ class Handler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/feedback":
             feedback = store.add_feedback(body)
             return self._json({"feedback": feedback, "profile": build_profile(store.samples(), store.feedback(), self.server.language_lessons.list())}, 201)
-        if method == "GET" and path in {"/", "/index.html", "/app.js", "/styles.css", "/correction-diff.mjs"}:
+        if method == "GET" and path in {"/", "/index.html", "/app.js", "/styles.css", "/correction-diff.mjs", "/voice-confidence.mjs"}:
             name = "index.html" if path == "/" else path[1:]
             asset = self.server.web_root / name
             if not asset.is_file() or asset.is_symlink():

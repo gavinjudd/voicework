@@ -1,4 +1,5 @@
 import {changedSpan, hasSimilarScope, correctionScopeSummary} from './correction-diff.mjs';
+import {confidenceView, pendingSampleCounts} from './voice-confidence.mjs';
 const app = document.querySelector('#app');
 const toastRegion = document.querySelector('#toast-region');
 const routes = { write: 'Write', practice: 'Practice', samples: 'Samples', evaluate: 'Check fit', profile: 'Voice profile' };
@@ -10,6 +11,7 @@ const ui = {
   lessonDraft: {dimension: 'vernacular', guidance: '', preferred: '', avoided: ''},
   editedDraft: '', draftUndo: null, rememberDraft: null, replacePrompt: false, generating: false, editorStorageError: false,
   qualityForm: {correctionId: '', brief: '', context: null}, qualityVotes: {},
+  wholeVoiceOpen: false,
 };
 let state;
 let nextId = 0;
@@ -224,10 +226,46 @@ const languageDimensions = {
 };
 const practiceFocuses = {mixed: {label: 'Mixed', plain: 'Whole voice', description: 'Compare expressions, word choice, sentence structure, and cadence together.', example: 'Notice both what it says and how you would say it.', coaching: 'What sounds like you, and what would you change?', note: 'e.g. “A uses my words, but I would start with the answer and shorten the second sentence.”'}, ...languageDimensions};
 function activeLanguageLessons() { return (state.language_lessons || []).filter(lesson => lesson.enabled); }
+function openWholeVoiceCheck() {
+  ui.wholeVoiceOpen = true;
+  navigate('evaluate');
+  const target = document.querySelector('#whole-voice-comparison');
+  target?.scrollIntoView({block: 'start', behavior: 'instant'});
+  target?.querySelector('summary')?.focus({preventScroll: true});
+}
+function confidencePanel() {
+  const confidence = confidenceView(state.voice_confidence);
+  const panel = el('section', {class: 'panel panel-pad confidence-panel', 'aria-label': 'Voice confidence'}, el('h2', {class: 'section-title'}, 'Voice confidence'));
+  if (!confidence) {
+    panel.append(el('p', {class: 'confidence-status'}, 'Unavailable'), helper('Confidence data is unavailable. Reload to check again.'));
+    return panel;
+  }
+  const {evidence, validation} = confidence;
+  const number = value => value === null ? 'Unavailable' : String(value);
+  const progressText = `${confidence.completed} of ${confidence.total} evidence checkpoints`;
+  const noteId = uid('confidence-note');
+  const checkpoints = el('ol', {class: 'confidence-checkpoints'}, confidence.milestones.map((milestone, index) => el('li', {class: milestone.complete ? 'is-complete' : ''},
+    el('span', {class: 'confidence-checkpoint-index', 'aria-hidden': 'true'}, milestone.complete ? icon('check', 12) : index + 1),
+    el('div', {}, el('strong', {}, milestone.label), el('span', {class: 'confidence-checkpoint-state'}, milestone.complete ? 'Complete' : 'Not yet complete'), helper(milestone.detail)))));
+  const outcomes = el('dl', {class: 'confidence-counts'}, [['Calibrated wins', validation.calibrated_wins], ['Baseline wins', validation.baseline_wins], ['Ties', validation.ties], ['Neither', validation.neither], ['Factual flags', validation.factual_flags]].map(([label, value]) => el('div', {}, el('dt', {}, label), el('dd', {}, number(value)))));
+  panel.append(...[
+    el('p', {class: 'confidence-status'}, confidence.label),
+    el('div', {class: 'confidence-bar', role: 'progressbar', 'aria-label': 'Voice confidence evidence readiness', 'aria-valuemin': 0, 'aria-valuemax': confidence.total, 'aria-valuenow': confidence.completed, 'aria-valuetext': progressText, 'aria-describedby': noteId}, Array.from({length: confidence.total}, (_, index) => el('span', {class: index < confidence.completed ? 'is-complete' : '', 'aria-hidden': 'true'}))),
+    el('p', {class: 'confidence-progress'}, progressText),
+    el('p', {class: 'helper', id: noteId}, 'Evidence readiness, not a measured writing-accuracy score.'),
+    el('div', {class: 'confidence-evidence'}, el('p', {}, el('strong', {}, number(evidence.authored_samples)), ' confirmed authored samples'), helper('Held-out samples excluded.'), el('p', {}, `${number(evidence.feedback)} saved feedback · ${number(evidence.lessons)} active ${evidence.lessons === 1 ? 'lesson' : 'lessons'}`), helper('Feedback and lessons are preferences, not authored writing.')),
+    el('p', {class: 'confidence-validation'}, el('strong', {}, number(validation.rated_real)), ' rated real voice comparisons'),
+    validation.rated_real > 0 ? outcomes : null,
+    confidence.next_step ? el('p', {class: 'helper confidence-next'}, confidence.next_step) : null,
+    button('Check fit', openWholeVoiceCheck, 'wide small', 'arrow'),
+    details('Checkpoints & observed results', el('div', {class: 'confidence-detail'}, checkpoints, el('h3', {}, 'Overall voice comparisons'), helper(`${number(validation.distinct_briefs)} distinct context + brief cases · ${validation.channels.length} known channels`), validation.rated_real > 0 ? null : outcomes, helper('These are judgments on the drafts compared. Outcomes do not determine this readiness bar.'), el('h3', {}, 'Correction checks, separately'), helper(`${number(validation.correction_checks)} rated real correction checks. These test one saved correction, not the overall voice profile.`), helper('Offline rehearsals do not count toward real validation.'), evidence.channels.length > 0 ? el('p', {class: 'helper'}, `Training channels: ${evidence.channels.join(', ')}.`) : null, confidence.note ? helper(confidence.note) : null))
+  ].filter(child => child !== null));
+  return panel;
+}
 function journeyPanel() {
   const profile = state.profile || {};
   const lessons = activeLanguageLessons().length;
-  const confirmed = state.samples.filter(sample => sample.status === 'confirmed').length;
+  const confirmed = state.samples.filter(sample => sample.status === 'confirmed' && !sample.held_out).length;
   const xp = Number(profile.xp) || 0;
   return el('section', { class: 'panel panel-pad journey-panel', 'aria-label': 'Practice progress' },
     el('div', { class: 'journey-title' }, el('div', { class: 'section-title', style: 'margin-bottom: 19px' }, 'Your practice'), badge(`Level ${profile.level || 1}`, 'muted')),
@@ -262,18 +300,18 @@ function sampleForm({ compact = false } = {}) {
 }
 function renderPractice() {
   const confirmed = state.samples.filter(sample => sample.status === 'confirmed' && !sample.held_out);
-  const pending = state.samples.filter(sample => sample.status === 'pending');
+  const pending = pendingSampleCounts(state.samples);
   const feedbackIds = new Set(state.feedback.map(item => String(item.round_id)));
   const unanswered = state.rounds.filter(round => !feedbackIds.has(String(round.id)) && round.status !== 'completed');
   const currentRound = unanswered.at(-1);
   const column = el('div', { class: 'primary-column' }, currentRound ? roundPanel(currentRound) : roundSetup(), languageLessonPanel({includeForm: true}));
-  if (pending.length) column.append(callout(`${plural(pending.length, 'sample')} waiting for review`, 'You can keep practicing now. Confirm authorship later if you want these samples to add evidence.', '', button('Review samples', () => navigate('samples'), 'small', 'arrow')));
+  if (pending.review) column.append(callout(`${plural(pending.review, 'sample')} waiting for review`, 'You can keep practicing now. Confirm authorship later if you want these samples to add evidence.', '', button('Review samples', () => navigate('samples'), 'small', 'arrow')));
   const hasTeaching = state.feedback.length > 0 || activeLanguageLessons().length > 0;
   const startNote = !confirmed.length && state.settings.provider === 'codex'
     ? (hasTeaching ? 'Your explicit lessons and choices can guide Codex even without samples. Calibration is still developing; judge each result.' : 'Uncalibrated, and ready to learn. Codex can start with a comparison now; your choices, corrections, and direct lessons will provide direction.')
     : (state.settings.provider === 'codex' ? 'Your lessons, choices, and optional confirmed writing provide context for Codex.' : 'Offline mode lets you record lessons and rehearse comparisons with deterministic examples. A language model is not running.');
   const aside = el('aside', { class: 'aside-column' }, journeyPanel(), stepsPanel(), el('div', { class: 'aside-note' }, el('h3', {}, 'Samples are optional.'), el('p', {}, startNote), button('Add writing samples later', () => navigate('samples'), 'quiet small', 'plus')), el('div', { class: 'aside-note' }, el('h3', {}, 'Teach the language and the presentation.'), el('p', {}, 'Your everyday expressions, vocabulary, sentence structure, and rhythm can change with the audience. Paragraphs, bullets, openings, and sign-offs have their own preferences, too.')));
-  return [pageHeading('Calibration / words, sentences, and context', 'Teach it how you actually write.', 'Start with a comparison or a direct lesson. No writing samples required; every choice gives it clearer direction.'), el('div', { class: 'layout' }, column, aside)];
+  return [pageHeading('Calibration / words, sentences, and context', 'Teach it how you actually write.', 'Start with a comparison or a direct lesson. No writing samples required; every choice gives it clearer direction.'), el('div', { class: 'layout confidence-layout' }, confidencePanel(), column, aside)];
 }
 function roundSetup() {
   const context = contextEditor(ui.context, { scenario: true });
@@ -428,6 +466,8 @@ function sampleCard(sample, { nested = false } = {}) {
   return card;
 }
 function renderSamples() {
+  const pending = pendingSampleCounts(state.samples);
+  const reviewSummary = el('p', {class: 'helper sample-review-summary'}, `${pending.review} pending review · ${pending.held_out} pending held out. Held-out writing stays excluded from training, even after authorship is confirmed.`);
   const filters = [['pending', 'To review'], ['confirmed', 'Confirmed'], ['assisted', 'Assisted'], ['rejected', 'Not mine'], ['all', 'All']];
   const filtered = state.samples.filter(sample => ui.filter === 'all' || sample.status === ui.filter);
   const filterBar = el('div', { class: 'filters', role: 'group', 'aria-label': 'Filter samples' }, filters.map(([key, label]) => el('button', { class: `filter ${ui.filter === key ? 'active' : ''}`, 'aria-pressed': key === ui.filter ? 'true' : 'false', onClick: () => { ui.filter = key; render(); } }, label, el('span', { class: 'filter-count' }, key === 'all' ? state.samples.length : state.samples.filter(sample => sample.status === key).length))));
@@ -435,7 +475,7 @@ function renderSamples() {
   const paste = el('section', { class: 'panel panel-pad', id: 'paste-sample' }, el('h2', {}, 'Add a writing sample'), helper('Paste a message, email, or passage. Each sample starts in your review inbox.'), el('div', { style: 'margin-top: 18px' }, sampleForm({ compact: true })));
   const sidebar = el('aside', { class: 'aside-column' }, discoveryPanel(), importPanel(), el('div', { class: 'aside-note' }, el('h3', {}, 'Good evidence has a clear source.'), el('p', {}, 'Saved paths and page URLs preserve provenance. “I wrote this” confirms authorship; it is never inferred from a file’s presence. Mixed or edited AI output belongs in Assisted.')));
   const add = button('Paste a sample', () => { paste.scrollIntoView({ behavior: 'smooth', block: 'start' }); paste.querySelector('textarea')?.focus({ preventScroll: true }); }, '', 'plus');
-  return [pageHeading('Evidence / your words, with context', 'Your writing library.', 'A considered collection of things you actually wrote. Review first, learn second.', add), el('div', { class: 'layout' }, el('div', { class: 'primary-column' }, el('div', {}, filterBar, list), paste), sidebar)];
+  return [pageHeading('Evidence / your words, with context', 'Your writing library.', 'A considered collection of things you actually wrote. Review first, learn second.', add), el('div', { class: 'layout confidence-layout' }, confidencePanel(), el('div', { class: 'primary-column' }, el('div', {}, reviewSummary, filterBar, list), paste), sidebar)];
 }
 async function runScan(id) {
   if (ui.scanRunning) return;
@@ -628,7 +668,7 @@ function renderProfile() {
   const preferencePanel = el('section', { class: 'panel' }, panelHeading('Preferences, in context', 'Your choices and reasons, kept separate from authored evidence.'), el('div', { class: 'panel-body' }, preferenceBody));
   const coverage = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Context coverage'), coverageMap.size ? [...coverageMap].map(([channel, counts]) => el('div', { class: 'coverage-row' }, el('strong', {}, channel || 'work'), el('span', {}, `${plural(counts.lessons, 'lesson')} · ${plural(counts.samples, 'sample')}`))) : helper('Teach a language preference in any context to start. Work, personal, community, and labels you create stay distinct.'));
   const provider = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Generation provider'), providerPill(), el('p', { class: 'export-note' }, state.settings.provider === 'codex' ? `Using your local Codex CLI${state.settings.model ? ` with ${state.settings.model}` : ''}. Selected evidence and your brief are sent to the configured model when you generate.` : 'Offline mode rehearses the workflow with deterministic rules. No language model is running. The README explains how to start with the Codex provider.'), helper(state.capabilities?.codex_available ? 'Codex CLI detected. Authentication is verified only when generation succeeds.' : 'Codex CLI availability has not been confirmed by the server.'));
-  return [pageHeading('Voice profile / evidence, not a score', 'A voice that keeps its context.', 'See what you’ve contributed, what you’ve explicitly preferred, and where there is more to learn.'), stats, el('div', { class: 'layout' }, el('div', { class: 'primary-column' }, languageLessonPanel(), preferencePanel, patternPanel, priorPanel()), el('aside', { class: 'aside-column' }, exportPanel(), coverage, provider, el('div', { class: 'aside-note' }, el('h3', {}, 'A profile, not a personality verdict.'), el('p', {}, 'This is a portable collection of evidence and preferences. Coverage grows with your contributions; a completion or XP count never establishes writing accuracy.'))))];
+  return [pageHeading('Voice profile / evidence, not a score', 'A voice that keeps its context.', 'See what you’ve contributed, what you’ve explicitly preferred, and where there is more to learn.'), stats, el('div', { class: 'layout confidence-layout' }, confidencePanel(), el('div', { class: 'primary-column' }, languageLessonPanel(), preferencePanel, patternPanel, priorPanel()), el('aside', { class: 'aside-column' }, exportPanel(), coverage, provider, el('div', { class: 'aside-note' }, el('h3', {}, 'A profile, not a personality verdict.'), el('p', {}, 'This is a portable collection of evidence and preferences. Coverage grows with your contributions; a completion or XP count never establishes writing accuracy.'))))];
 }
 function exportPanel() {
   const include = input({ type: 'checkbox', checked: ui.includeExamples, onChange: event => { ui.includeExamples = event.target.checked; ui.exportText = ''; preview.replaceChildren(); } });
@@ -694,8 +734,9 @@ function renderEvaluate() {
   const history = (state.quality_checks || []).filter(item => item.status !== 'unrated');
   for (const item of history) counts.append(qualityCheckPanel(item, true));
   column.append(counts);
-  const legacy = renderLegacyEvaluation();
-  column.append(el('section', {class: 'panel panel-pad'}, details('Other evaluations: whole profile vs baseline', el('div', {class: 'legacy-evaluation'}, helper('These older whole-profile comparisons use separate records and counts. They are not correction checks.'), legacy))));
+  const wholeVoice = details('Compare your whole voice profile', el('div', {class: 'whole-voice-evaluation'}, helper('Compare the full calibrated profile with a baseline. These judgments inform voice confidence readiness and stay separate from correction checks.'), renderWholeVoiceEvaluation()), ui.wholeVoiceOpen);
+  wholeVoice.addEventListener('toggle', () => { ui.wholeVoiceOpen = wholeVoice.open; });
+  column.append(el('section', {class: 'panel panel-pad', id: 'whole-voice-comparison'}, wholeVoice));
   return [pageHeading('Check fit / one correction at a time', 'Keep the changes that help.', 'Compare a saved correction on a new message. Judge which needs less work and whether both preserve the meaning.'), state.settings.provider !== 'codex' && el('div', {style: 'margin-bottom: 20px'}, callout('Offline checks are rehearsals', 'Both versions use deterministic rules. Ratings are kept separately and do not count as evidence that an AI model improved.', 'warning')), column];
 }
 function qualityCheckPanel(item, nested = false) {
@@ -741,7 +782,7 @@ function qualityCheckPanel(item, nested = false) {
   return form;
 }
 
-function renderLegacyEvaluation() {
+function renderWholeVoiceEvaluation() {
   const summary=state.evaluation_summary || {};
   const context=contextEditor(ui.context,{scenario:true});
   const brief=el('textarea',{required:true,maxlength:15000,rows:4,placeholder:'Give both versions the same facts and desired outcome. Do not paste held-out answer text.', 'aria-label':'Comparison brief'});

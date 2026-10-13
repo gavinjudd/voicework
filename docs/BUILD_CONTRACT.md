@@ -45,6 +45,12 @@ POST /api/draft {context,brief,controls:{polish:0..100,detail:0..100,warmth:0..1
 GET /api/export -> {markdown,filename:'VOICE_PROFILE.md'}; portable context profile + preferences + enabled language lessons + confirmed priors, no raw sample text by default.
 GET /api/export?examples=1 -> same with confirmed non-held-out examples (user explicitly opts in UI).
 
+## Voice confidence checkpoints
+
+GET /api/state also returns `voice_confidence`: `{label,completed,total:3,milestones:[{id,label,complete,detail}],evidence:{authored_samples,feedback,lessons,channels},validation:{rated_real,calibrated_wins,baseline_wins,ties,neither,factual_flags,distinct_briefs,channels,correction_checks},note,next_step}`. The bar is explicitly evidence readiness, never a writing-accuracy percentage or an inferred authorship score. It reports cumulative checkpoints: evidence saved; at least one rated Codex whole-profile comparison; at least three distinct normalized context/brief pairs across at least two known channels. Comparison completion does not imply positive results. Outcome counts remain visible, including losses and factual flags; historical results do not establish the quality of the current profile.
+
+Authored evidence counts normalized unique confirmed, non-held-out text only. Saved practice preferences and enabled direct language lessons are separate ways to start evidence readiness. Pending, assisted, rejected and held-out samples never advance it as authored evidence. Unrated and offline comparisons do not count as real validation. Rated Codex correction checks have a separate count and do not advance whole-voice milestones. The confidence response contains aggregate metadata only, with no raw examples or unrevealed comparison mappings.
+
 GET /api/language-lessons -> {language_lessons}.
 POST /api/language-lessons {context?,dimension,guidance?,preferred?,avoided?} -> {lesson}; enabled=true. Reject unknown fields and require at least one nonblank content field.
 PATCH /api/language-lessons/:id {context?,dimension?,guidance?,preferred?,avoided?,enabled?} -> {lesson}; nonempty partial patch. A supplied context replaces the previous context using the usual six-field normalization.
