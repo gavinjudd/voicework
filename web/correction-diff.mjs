@@ -33,5 +33,5 @@ export function correctionScopeSummary(context = {}, scope = 'similar') {
   if (scope === 'channel') return `All ${channel} writing, regardless of recipient, purpose, relationship, or stakes.`;
   const labels = {audience: 'to', intent: 'purpose', relationship: 'relationship', stakes: 'stakes'};
   const parts = Object.entries(labels).filter(([key]) => context[key]?.trim()).map(([key, label]) => `${label}: ${context[key].trim()}`);
-  return parts.length ? `${channel} writing matching ${parts.join(' · ')}. All listed fields must match exactly.` : `Add who this is for to keep the lesson specific within ${channel}.`;
+  return parts.length ? `${channel} writing matching ${parts.join(' · ')}. All listed conditions must match; recognized equivalent labels count.` : `Add who this is for to keep the lesson specific within ${channel}.`;
 }

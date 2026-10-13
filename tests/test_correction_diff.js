@@ -42,7 +42,7 @@ test('similar scope requires an actual matching field, not scenario alone', () =
   assert.equal(hasSimilarScope({channel:'work', scenario:'A project update'}), false);
   assert.equal(hasSimilarScope({audience:'  '}), false);
   assert.equal(hasSimilarScope({audience:'Team'}), true);
-  assert.match(correctionScopeSummary({channel:'personal', audience:'Friend', scenario:'Dinner'}, 'similar'), /All listed fields must match exactly/);
+  assert.match(correctionScopeSummary({channel:'personal', audience:'Friend', scenario:'Dinner'}, 'similar'), /All listed conditions must match; recognized equivalent labels count/);
   assert.ok(!correctionScopeSummary({audience:'Friend', scenario:'Dinner'}).includes('Dinner'));
   assert.match(correctionScopeSummary({channel:'work', audience:'Team'}, 'channel'), /regardless of recipient/);
 });
