@@ -105,7 +105,7 @@ Future schema additions should include a source-document group ID, source timest
 
 The current controls are polish, detail, warmth, assertiveness, and structure. Interpret low-to-high “inflation” as **more elaboration or stronger presentation of supported information**, not inflated accomplishments or invented specificity. An assertive version cannot turn “I think” into “I verified,” “helped” into “led,” or a plan into a completed result. More warmth cannot introduce an apology, promise, or concession absent from the brief.
 
-These are generation instructions, not enforced factual guarantees. Review remains necessary. The next hardening step is a fact ledger extracted from the brief, then a diff that flags changed numbers, entities, commitments, certainty, and attribution before the result is accepted. The ledger, verifier, and blocking policy are not implemented in this build.
+Whole-document rewriting now combines local structural/invariant checks with a bounded model review of content and context-specific voice. Protected Markdown structure is retained; changed details and possible semantic or voice problems are reported separately. Failed generation produces no partial accepted draft. Model reviews can miss mistakes, so a clean diagnostic is not factual certification or a measured voice score. A complete source-backed fact ledger and independently verified blocking policy remain future work. The explicit register control (`auto`, `casual`, `professional`, `formal`) governs this draft without creating a remembered preference.
 
 ## Evaluation before bigger training
 
@@ -122,7 +122,7 @@ Begin with a small balanced panel of real scenarios, record its size and per-con
 ## Roadmap with exit criteria
 
 1. **Make the manual loop useful.** Validate review, practice, draft, restart persistence, deletion, holdout exclusion, and export with real user-selected material. Fix capture and context friction before widening ingestion.
-2. **Improve evidence and evaluation.** Build on isolated correction checks and subjective editing-effort ratings with source grouping, full profile versions, automatic fact checks and observed editing-time measurements. Proceed only when the user can correct a bad rule and see that correction in later drafts.
+2. **Improve evidence and evaluation.** Build on isolated correction checks, whole-document diagnostics and subjective editing-effort ratings with source grouping, full profile versions, stronger independent content verification and observed editing-time measurements. Proceed only when the user can correct a bad rule and see that correction in later drafts.
 3. **Optimize prompts experimentally.** Compare contextual retrieval and a frozen hand-written profile against DSPy or TextGrad on development data; promote only with held-out benefit and no factual regression.
 4. **Extend source integrations when needed.** Add a supported selected-file Drive API connector and source refresh if the current Chrome selection/TXT path proves insufficient. Add richer formatting extraction where plain text loses useful evidence.
 5. **Consider actual model training.** Export consented, versioned preference pairs and approved edits; compare SFT/DPO against the best prompt baseline on separate test data. Confirm provider availability, training costs, base-model rights, deletion implications, and rollback before starting jobs. No fixed sample-count promise.

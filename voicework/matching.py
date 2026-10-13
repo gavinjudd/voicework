@@ -1,8 +1,9 @@
 """Conservative, inspectable context matching without changing source records.
 
 Aliases apply to entire labels in one named field, never to words inside an
-unrecognized label. In particular, qualifiers, negation, and named audiences
-are not removed. This is a small vocabulary, not a semantic classifier.
+unrecognized label. A bounded technical-explanation grammar is enabled only
+inside the technical-article family. Qualifiers, negation, and named audiences
+are not removed. This is a small taxonomy, not a general semantic classifier.
 """
 import re
 
@@ -22,6 +23,14 @@ _PEOPLE = (
     ("romantic partner", "significant other"),
 )
 ALIAS_GROUPS = {
+    # These describe one writing format. Explicit short, informal, private,
+    # academic, marketing, and other qualified formats do not join this family.
+    "channel": (
+        ("technical article", "long-form technical article", "long form technical article",
+         "technical research article", "technical explainer"),
+        ("personal text message", "personal text", "personal sms"),
+        ("work email", "professional email", "business email"),
+    ),
     "audience": _PEOPLE + (("public", "general public", "public audience"),),
     "relationship": _PEOPLE + (
         ("professional", "work relationship", "professional relationship"),
@@ -47,6 +56,17 @@ ALIAS_GROUPS = {
 }
 _ALIASES = {field: {label: group[0] for group in groups for label in group}
             for field, groups in ALIAS_GROUPS.items()}
+
+# Full labels only: no keyword scoring, suffix stripping, arbitrary corpus
+# nearest-neighbor selection, or model call. In a technical article, these
+# labels identify the same explanatory purpose; the original intent/scenario
+# still goes to the provider and governs what the draft actually says.
+_TECHNICAL_EXPLANATION = re.compile(
+    r"(?:explain|describe|clarify|unpack) (?:a |an |the )?"
+    r"(?:technical research|technical findings|research findings|research|"
+    r"technical investigation|investigation|technical study|study)"
+    r"(?: and (?:its |their |the )?implications)?"
+)
 
 # These remain literal labels for lesson conditions, not blank wildcards. In
 # retrieval they are missing information, so cannot establish relevance.
@@ -90,15 +110,57 @@ def _literal(value):
     return " ".join(str(value or "").casefold().split())
 
 
-def normalize_label(field, value):
-    """Normalize spelling only through this field's whole-label alias table."""
+def normalize_label(field, value, context=None):
+    """Return a matching key, never a replacement for the original label."""
     literal = _literal(value)
+    if (field == "intent" and context is not None and
+            normalize_label("channel", context.get("channel")) == "technical article" and
+            _TECHNICAL_EXPLANATION.fullmatch(literal)):
+        return "explain technical research"
     return _ALIASES.get(field, {}).get(literal, literal)
 
 
 def same_channel(left_context, right_context):
-    """Channels are hard boundaries: no channel aliases or inferred channels."""
-    return normalize_label("channel", left_context.get("channel", "work")) == normalize_label("channel", right_context.get("channel", "work"))
+    """Match a known channel or explicit format alias; never infer a channel."""
+    left = normalize_label("channel", left_context.get("channel", "work"))
+    right = normalize_label("channel", right_context.get("channel", "work"))
+    return left not in _UNINFORMATIVE and right not in _UNINFORMATIVE and left == right
+
+
+def _label_explanation(field, actual, requested):
+    found = actual.get(field, "work" if field == "channel" else "")
+    wanted = requested.get(field, "work" if field == "channel" else "")
+    key = normalize_label(field, found, actual)
+    if key != normalize_label(field, wanted, requested) or _literal(found) == _literal(wanted):
+        return None
+    return {"field": field, "actual": found, "requested": wanted, "canonical": key,
+            "reason": "technical_explanation_family" if field == "intent" and key == "explain technical research"
+            else "explicit_label_alias"}
+
+
+def explain_lesson_context_match(declared, requested):
+    """Explain every lesson condition without changing its stored scope."""
+    result = {"eligible": False, "reason": "context_conflict", "matched_fields": [],
+              "conflicting_fields": [], "alias_matches": [], "scenario_is_conditional": True}
+    if normalize_label("channel", requested.get("channel", "work")) in _UNINFORMATIVE:
+        result.update(reason="unknown_channel", conflicting_fields=["channel"])
+        return result
+    if not same_channel(declared, requested):
+        result.update(reason="channel_mismatch", conflicting_fields=["channel"])
+        return result
+    for field in ("channel",) + CONDITION_FIELDS:
+        if field != "channel" and not _literal(declared.get(field)):
+            continue
+        if normalize_label(field, declared.get(field, "work" if field == "channel" else ""), declared) != normalize_label(field, requested.get(field, "work" if field == "channel" else ""), requested):
+            result["conflicting_fields"].append(field)
+        else:
+            result["matched_fields"].append(field)
+            explanation = _label_explanation(field, declared, requested)
+            if explanation:
+                result["alias_matches"].append(explanation)
+    if not result["conflicting_fields"]:
+        result.update(eligible=True, reason="all_declared_conditions_match")
+    return result
 
 
 def lesson_context_matches(declared, requested):
@@ -107,11 +169,42 @@ def lesson_context_matches(declared, requested):
     Scenario is retained on the lesson as conditional generation guidance. It
     is not reduced to keywords or promoted into an unconditional style rule.
     """
-    return same_channel(declared, requested) and all(
-        not _literal(declared.get(field)) or
-        normalize_label(field, declared.get(field)) == normalize_label(field, requested.get(field))
-        for field in CONDITION_FIELDS
-    )
+    return explain_lesson_context_match(declared, requested)["eligible"]
+
+
+def _register(context):
+    """Recognize explicit register modifiers only on known writing labels.
+
+    This only excludes contradictory evidence; it never grants relevance or
+    strips modifiers to make a lesson eligible. Mixed/negated labels abstain.
+    """
+    registers = set()
+    for field in ("channel", "intent"):
+        label = _literal(context.get(field))
+        if label in {"formal", "informal", "casual", "conversational"}:
+            registers.add("formal" if label == "formal" else "informal")
+            continue
+        match = re.fullmatch(r"(formal|informal|casual|conversational) (.+)", label)
+        if not match:
+            continue
+        modifier, base = match.groups()
+        known = base in _ALIASES.get(field, {})
+        if field == "intent":
+            known = known or base in _INTENT_VISIBILITY or bool(_TECHNICAL_EXPLANATION.fullmatch(base))
+        if field == "channel":
+            known = known or base in {"work", "personal", "email", "message", "chat", "article", "text message"}
+        if known:
+            registers.add("formal" if modifier == "formal" else "informal")
+    return next(iter(registers)) if len(registers) == 1 else None
+
+
+def _visibility(intent):
+    label = normalize_label("intent", intent)
+    # A register qualifier does not erase an explicit public/private boundary.
+    qualified = re.fullmatch(r"(?:formal|informal|casual|conversational) (.+)", label)
+    if qualified:
+        label = normalize_label("intent", qualified.group(1))
+    return _INTENT_VISIBILITY.get(label)
 
 
 def _scenario_words(value):
@@ -132,35 +225,53 @@ def explain_context_match(actual, requested):
     """
     result = {"eligible": False, "score": 0, "reason": "insufficient_relevance",
               "matched_fields": [], "conflicting_fields": [], "scenario_overlap": [],
+              "alias_matches": [],
               "channel_only": not any(_literal(requested.get(field)) for field in CONDITION_FIELDS + ("scenario",))}
-    if not same_channel(actual, requested):
-        result.update(reason="channel_mismatch", conflicting_fields=["channel"])
-        return result
     if normalize_label("channel", requested.get("channel", "work")) in _UNINFORMATIVE:
         result["reason"] = "unknown_channel"
         return result
+    if not same_channel(actual, requested):
+        result.update(reason="channel_mismatch", conflicting_fields=["channel"])
+        return result
+    channel_alias = _label_explanation("channel", actual, requested)
+    if channel_alias:
+        result["alias_matches"].append(channel_alias)
     if result["channel_only"]:
         result.update(eligible=True, score=1, reason="channel_only_fallback")
         return result
 
     for field in CONDITION_FIELDS:
-        wanted = normalize_label(field, requested.get(field))
-        found = normalize_label(field, actual.get(field))
+        wanted = normalize_label(field, requested.get(field), requested)
+        found = normalize_label(field, actual.get(field), actual)
         if wanted in _UNINFORMATIVE or found in _UNINFORMATIVE:
             continue
         if wanted == found:
             result["matched_fields"].append(field)
             result["score"] += _WEIGHTS[field]
+            explanation = _label_explanation(field, actual, requested)
+            if explanation:
+                result["alias_matches"].append(explanation)
         else:
             result["conflicting_fields"].append(field)
             result["score"] -= 2
     if _HARD_FIELDS.intersection(result["conflicting_fields"]):
         result["reason"] = "context_conflict"
         return result
-    found_visibility = _INTENT_VISIBILITY.get(normalize_label("intent", actual.get("intent")))
-    wanted_visibility = _INTENT_VISIBILITY.get(normalize_label("intent", requested.get("intent")))
+    actual_register, requested_register = _register(actual), _register(requested)
+    if actual_register and requested_register and actual_register != requested_register:
+        result["reason"] = "register_conflict"
+        return result
+    found_visibility = _visibility(actual.get("intent"))
+    wanted_visibility = _visibility(requested.get("intent"))
     if found_visibility and wanted_visibility and found_visibility != wanted_visibility:
         result["reason"] = "visibility_conflict"
+        return result
+
+    wanted_intent_words, wanted_intent_negation = _scenario_words(requested.get("intent"))
+    found_intent_words, found_intent_negation = _scenario_words(actual.get("intent"))
+    if (wanted_intent_words & found_intent_words and
+            bool(wanted_intent_negation) != bool(found_intent_negation)):
+        result["reason"] = "intent_polarity_conflict"
         return result
 
     wanted_words, wanted_negation = _scenario_words(requested.get("scenario"))

@@ -1,5 +1,7 @@
 """Loopback-only HTTP app with same-origin and per-launch token protection."""
 import hmac
+import copy
+import hashlib
 import json
 import secrets
 import socket
@@ -19,6 +21,9 @@ from .language import LanguageLessonStore, validate_focus
 from .corrections import CorrectionStore, CorrectionConflict
 from .quality import QualityStore
 from .confidence import build_voice_confidence
+from .document_jobs import DocumentJobs
+from .documents import MAX_DOCUMENT_CHARS, MAX_OUTPUT_CHARS, validate_document_text
+from .routing import resolve_context
 
 MAX_BODY_BYTES = 8 * 1024 * 1024
 
@@ -45,7 +50,7 @@ def _unique_object(pairs):
 def validate_controls(value):
     if value is None:
         value = {}
-    if not isinstance(value, dict) or set(value) - {"polish", "detail", "warmth", "assertiveness", "structure"}:
+    if not isinstance(value, dict) or set(value) - {"polish", "detail", "warmth", "assertiveness", "structure", "register"}:
         raise ValueError("Unknown draft control")
     controls = {}
     for key in ("polish", "detail", "warmth", "assertiveness"):
@@ -57,6 +62,10 @@ def validate_controls(value):
     if not isinstance(structure, str) or structure not in {"auto", "prose", "bullets"}:
         raise ValueError("structure must be auto, prose, or bullets")
     controls["structure"] = structure
+    register = value.get("register", "auto")
+    if register not in ("auto", "casual", "professional", "formal"):
+        raise ValueError("register must be auto, casual, professional, or formal")
+    controls["register"] = register
     return controls
 
 
@@ -77,6 +86,7 @@ class VoiceworkServer(ThreadingHTTPServer):
         self.token = secrets.token_urlsafe(32)
         self._slots = threading.BoundedSemaphore(16)
         self.generation_slots = threading.BoundedSemaphore(2)
+        self.document_jobs = DocumentJobs(self.generation_slots)
         self.discovery_slot = threading.BoundedSemaphore(1)
         super().__init__(address, Handler)
 
@@ -236,11 +246,76 @@ class Handler(BaseHTTPRequestHandler):
     def _language_preferences(self, context):
         return [{**item, "is_language_lesson": True} for item in self.server.language_lessons.matching(context)]
 
+    def _writing_inputs(self, context):
+        samples = self.server.store.samples()
+        feedback = self.server.store.feedback()
+        lessons = self.server.language_lessons.list()
+        available = ([item for item in lessons if item.get("enabled")]
+                     + [item for item in samples if item.get("status") == "confirmed" and not item.get("held_out")]
+                     + feedback + self.server.priors.list(confirmed_only=True))
+        report = resolve_context(context, [item.get("context", {}) for item in available])
+        context = report["context"]
+        evidence = retrieve(samples, context)
+        preferences = contextual_preferences(feedback, context) + self._prior_preferences(context) + self._language_preferences(context)
+        report["evidence_ids"] = [item["id"] for item in evidence]
+        report["lesson_ids"] = [item["id"] for item in preferences if item.get("is_language_lesson")]
+        report["counts"] = {"authored_examples": len(evidence), "language_lessons": len(report["lesson_ids"]),
+                            "feedback": sum(not item.get("is_language_lesson") and not item.get("is_prior") for item in preferences),
+                            "priors": sum(bool(item.get("is_prior")) for item in preferences)}
+        if not evidence and not preferences:
+            report["warnings"].append("No reviewed voice guidance matches this context. This draft cannot demonstrate your calibrated voice.")
+        return context, evidence, preferences, report
+
     def _route(self, path, query, body):
         store, provider = self.server.store, self.server.provider
         method = "GET" if self.command == "HEAD" else self.command
         if method == "GET" and path == "/api/health":
             return self._json({"ok": True})
+        if method == "GET" and path == "/api/session":
+            return self._json({"token": self.server.token, "provider": provider.mode,
+                               "limits": {"document_chars": MAX_DOCUMENT_CHARS, "output_chars": MAX_OUTPUT_CHARS}})
+        if method == "POST" and path == "/api/context/resolve":
+            self._fields(body, {"context"})
+            return self._json(self._writing_inputs(validate_context(body.get("context")))[3])
+        if method == "GET" and path.startswith("/api/documents/"):
+            ident = path[len("/api/documents/"):]
+            if len(ident) != 36 or "/" in ident:
+                raise HTTPError(404, "Document job not found")
+            return self._json(self.server.document_jobs.get(ident))
+        if method == "POST" and path in {"/api/documents", "/api/document-checks"}:
+            checking = path == "/api/document-checks"
+            self._fields(body, {"context", "source", "controls", "text"} if checking else {"context", "source", "controls"})
+            source = validate_document_text(body.get("source"))
+            draft = validate_document_text(body.get("text"), output=True) if checking else None
+            controls = validate_controls(body.get("controls"))
+            context, evidence, preferences, report = self._writing_inputs(validate_context(body.get("context")))
+            # Context choices are useful in the explicit local preview, but
+            # unrelated lesson metadata does not belong in a portable result.
+            report.pop("candidates", None)
+            # Freeze all inputs before background work, including profile changes
+            # made while the document is being generated or checked.
+            frozen = copy.deepcopy({"context": context, "evidence": evidence, "preferences": preferences, "controls": controls})
+            report["profile_fingerprint"] = hashlib.sha256(json.dumps(frozen, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+            def operation():
+                args = (frozen["context"], source)
+                tail = (frozen["controls"], frozen["evidence"], frozen["preferences"])
+                if checking:
+                    result = {"checks": provider.check_document(*args, draft, *tail), "provider": provider.mode}
+                else:
+                    result = provider.generate_document(*args, *tail)
+                    if not isinstance(result, dict):
+                        raise ValueError("Invalid document result")
+                    validate_document_text(result.get("text"), output=True)
+                result["evidence_ids"] = [item["id"] for item in frozen["evidence"]]
+                result["context_report"] = report
+                return result
+
+            try:
+                job = self.server.document_jobs.start(operation, "check" if checking else "rewrite")
+            except RuntimeError as exc:
+                raise HTTPError(429, str(exc)) from None
+            return self._json(job, 202)
         if method == "GET" and path == "/api/state":
             samples, rounds, feedback = store.samples(), store.rounds(), store.feedback()
             lessons = self.server.language_lessons.list()
@@ -281,8 +356,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.server.corrections.undo(parts[3]))
             self._fields(body, {"context", "brief"})
             correction, target_lesson, context, brief = self.server.corrections.prepare_check(parts[3], body.get("context"), body.get("brief", ""))
-            evidence = retrieve(store.samples(), context)
-            preferences = contextual_preferences(store.feedback(), context) + self._prior_preferences(context) + self._language_preferences(context)
+            context, evidence, preferences, report = self._writing_inputs(context)
             if not self.server.generation_slots.acquire(blocking=False):
                 raise HTTPError(429, "Generation is busy; try again shortly")
             try:
@@ -405,8 +479,8 @@ class Handler(BaseHTTPRequestHandler):
             focus = validate_focus(body.get("focus", "mixed")) if path == "/api/rounds" else None
             brief = text_field(body.get("brief", ""), "brief", 15000, True) if path == "/api/draft" else None
             controls = validate_controls(body.get("controls")) if brief is not None else None
-            evidence = retrieve(store.samples(), context)
-            preferences = contextual_preferences(store.feedback(), context) + self._prior_preferences(context) + self._language_preferences(context)
+            context, evidence, preferences, report = self._writing_inputs(context)
+            report.pop("candidates", None)
             if not self.server.generation_slots.acquire(blocking=False):
                 raise HTTPError(429, "Two generations are already running; try again shortly")
             try:
@@ -423,13 +497,14 @@ class Handler(BaseHTTPRequestHandler):
                 # Evidence provenance is based on what the server supplied, never
                 # on IDs invented by a provider response.
                 generated["evidence_ids"] = [s["id"] for s in evidence]
+                generated["context_report"] = report
                 return self._json(generated)
             finally:
                 self.server.generation_slots.release()
         if method == "POST" and path == "/api/feedback":
             feedback = store.add_feedback(body)
             return self._json({"feedback": feedback, "profile": build_profile(store.samples(), store.feedback(), self.server.language_lessons.list())}, 201)
-        if method == "GET" and path in {"/", "/index.html", "/app.js", "/styles.css", "/correction-diff.mjs", "/voice-confidence.mjs"}:
+        if method == "GET" and path in {"/", "/index.html", "/app.js", "/styles.css", "/correction-diff.mjs", "/voice-confidence.mjs", "/document-state.mjs"}:
             name = "index.html" if path == "/" else path[1:]
             asset = self.server.web_root / name
             if not asset.is_file() or asset.is_symlink():

@@ -4,6 +4,10 @@ A local writing practice studio that learns how you write **for a particular aud
 
 Start without samples: write a useful draft, edit it your way, and choose which corrections to remember. Preview the takeaway and its context before saving it; undo a remembered correction when it stops helping. Focused practice and direct language lessons remain available. Optionally add reviewed writing to ground the profile in authentic examples. Personal texting and professional writing retain separate contextual evidence.
 
+**Whole documents:** open Write → Whole document to paste Markdown/plain text or open a local `.md`/`.txt` file. Select the trained context that fits, adjust audience/purpose and register, then rewrite. The engine processes bounded sections with a frozen voice profile, preserves protected document structure, and returns editable text with separate content and voice checks. Editing makes previous checks stale; recheck the revised text before relying on them. The source and generated writing do not become training samples.
+
+The document limit is **120,000 characters**; output is capped at **240,000 characters**. Rich Word/PDF layout and arbitrary MDX components are not supported as editable document formats. Model review is an additional diagnostic, not proof of fidelity or factual correctness. Offline mode preserves the source exactly and marks semantic/voice review unavailable.
+
 Source is published in the private [gavinjudd/voicework repository](https://github.com/gavinjudd/voicework).
 
 ## Run
@@ -66,13 +70,39 @@ The current system uses context-matched examples, descriptive writing patterns, 
 
 Context matching recognizes a small, explicit vocabulary of equivalent labels, such as “request review” and “ask for feedback,” while preserving every populated lesson condition. Audience, relationship, stakes and channel boundaries keep incompatible examples out. Specific requests need relevant evidence; the app no longer fills the prompt with unrelated same-channel samples. Custom and qualified labels stay literal, and scenario notes remain conditional guidance. This is conservative matching, not general semantic understanding.
 
+Technical-article labels now share an explicit family, and equivalent technical-explanation intents match within that family. The routing report shows aliases, selected evidence/lesson counts and missing guidance; it does not silently infer a new audience or rewrite stored contexts. Formality can be set explicitly with `register: auto|casual|professional|formal`.
+
+## Use it from another AI or script
+
+Keep the local app running with your chosen provider. Create a JSON request containing `source`, `context`, and optional `controls`, then run:
+
+```sh
+python3 -m voicework.harness --request request.json --output result.json
+```
+
+```json
+{
+  "source": "# Investigation\n\nThe cache handled 17 requests. It did not reduce storage.",
+  "context": {
+    "channel": "technical article",
+    "audience": "technical readers",
+    "intent": "explain technical research"
+  },
+  "controls": {"register": "professional", "structure": "auto"}
+}
+```
+
+To check an edited result without rewriting, include `text` alongside the original `source` and add `--check`. The JSON result contains the draft, separate checks, source/draft hashes, and context selection provenance. Exit code **0** means checks completed with no reported issue, **3** means review is required, and **2** means the operation failed. None of these codes certify personal voice accuracy. Output files must be new and are created with private filesystem permissions. Use `--request -` for stdin; omitting `--output` deliberately writes the result to stdout.
+
+The same interface is available through `POST /api/documents`, `POST /api/document-checks`, and polling `GET /api/documents/:id`. Jobs run in memory, survive browser refresh, and disappear on server restart; copy/download results you need to keep. Completed jobs expire after one hour or when evicted from the bounded result cache. See [BUILD_CONTRACT.md](docs/BUILD_CONTRACT.md).
+
 Context analysis uses offline heuristics or the selected Codex provider and returns a reviewable preview. Prior packets store background or guidance, never authentic writing. Blinded evaluation is a separate lane: both drafts receive the same brief and neutral controls, while only the calibrated draft receives approved examples, preferences, active contextual lessons and confirmed priors. Ratings are immutable and excluded from learning. Counts include baseline wins, calibrated wins, ties, neither and factual flags by channel; offline comparisons are counted separately as rehearsal. Preference counts do not establish achieved writing accuracy or factual correctness.
 
 Correction quality checks answer a narrower question: does this particular saved correction help? Both variants receive the same current evidence and other preferences; only the selected correction differs. Generation order and display labels are randomized. The saved case records the model, controls and fingerprints of the fixed inputs. This is not a replay of an entire historical profile. Voice choice, meaning judgments and expected editing effort remain separate, and offline checks never count as real-model results. Use multiple fresh situations before drawing a conclusion; one favorable comparison does not establish improvement.
 
 A generated draft lists the examples supplied to the model. These IDs explain retrieval, not a claim that a particular sentence came from a particular source. Strong controls are guidance to the model, not a verified factuality guarantee; review important drafts before using them.
 
-[PRODUCT.md](docs/PRODUCT.md) separates the implemented workflow from future source grouping, fact checks, prompt optimization and weight training. [RESEARCH.md](docs/RESEARCH.md) records the source-backed research and reuse decisions.
+[PRODUCT.md](docs/PRODUCT.md) separates the implemented workflow from future source grouping, independent fact verification, prompt optimization and weight training. [RESEARCH.md](docs/RESEARCH.md) records the source-backed research and reuse decisions.
 
 ## Local data and boundaries
 
@@ -93,7 +123,7 @@ python3 -m compileall -q voicework
 node --check web/app.js
 node --check extension/popup.js
 node --check extension/background.js
-node --test tests/test_browser_discovery.js tests/test_correction_diff.js
+node --test tests/test_browser_discovery.js tests/test_correction_diff.js tests/test_voice_confidence.js tests/test_document_state.js
 ```
 
 Node is optional for syntax checks, not required to run the app. See [BUILD_CONTRACT.md](docs/BUILD_CONTRACT.md) for the API and [AGENTS.md](AGENTS.md) for repository development rules.

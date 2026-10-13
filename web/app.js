@@ -1,17 +1,18 @@
 import {changedSpan, hasSimilarScope, correctionScopeSummary} from './correction-diff.mjs';
 import {confidenceView, pendingSampleCounts} from './voice-confidence.mjs';
+import {DOCUMENT_SOURCE_LIMIT, DOCUMENT_OUTPUT_LIMIT, DOCUMENT_STORAGE_LIMIT, cleanDocumentContext, emptyDocument, restoreDocument, validDocumentJob, activeDocumentJob, documentChecksCurrent, reviseDocument, acceptDocumentJob, documentDownloadName} from './document-state.mjs';
 const app = document.querySelector('#app');
 const toastRegion = document.querySelector('#toast-region');
 const routes = { write: 'Write', practice: 'Practice', samples: 'Samples', evaluate: 'Check fit', profile: 'Voice profile' };
 const ui = {
   route: routes[location.hash.slice(1)] ? location.hash.slice(1) : 'write',
   filter: 'pending', context: { channel: 'work', audience: '', intent: '', stakes: '', relationship: '', scenario: '' },
-  selections: new Map(), draft: null, brief: '', controls: { polish: 45, detail: 45, warmth: 50, assertiveness: 50, structure: 'auto' },
+  selections: new Map(), draft: null, brief: '', controls: { polish: 45, detail: 45, warmth: 50, assertiveness: 50, structure: 'auto', register: 'auto' },
   scanResult: null, scanRunning: null, exportText: '', includeExamples: false, practiceFocus: 'vernacular',
   lessonDraft: {dimension: 'vernacular', guidance: '', preferred: '', avoided: ''},
   editedDraft: '', draftUndo: null, rememberDraft: null, replacePrompt: false, generating: false, editorStorageError: false,
   qualityForm: {correctionId: '', brief: '', context: null}, qualityVotes: {},
-  wholeVoiceOpen: false,
+  wholeVoiceOpen: false, writeMode: 'message', document: emptyDocument(), documentStorageError: false, documentStarting: false, documentReplacePrompt: false, documentContextPreview: null,
 };
 let state;
 let nextId = 0;
@@ -34,12 +35,37 @@ try {
       if (saved.rememberDraft && typeof saved.rememberDraft.original_text === 'string' && typeof saved.rememberDraft.revised_text === 'string') ui.rememberDraft = saved.rememberDraft;
     }
     if (saved.context && typeof saved.context === 'object') for (const key of Object.keys(ui.context)) if (typeof saved.context[key] === 'string') ui.context[key] = saved.context[key];
-    if (saved.controls && typeof saved.controls === 'object') for (const key of Object.keys(ui.controls)) if (key === 'structure' ? ['auto','prose','bullets'].includes(saved.controls[key]) : Number.isFinite(saved.controls[key]) && saved.controls[key] >= 0 && saved.controls[key] <= 100) ui.controls[key] = saved.controls[key];
+    if (saved.controls && typeof saved.controls === 'object') for (const key of Object.keys(ui.controls)) if (key === 'structure' ? ['auto','prose','bullets'].includes(saved.controls[key]) : key === 'register' ? ['auto','casual','professional','formal'].includes(saved.controls[key]) : Number.isFinite(saved.controls[key]) && saved.controls[key] >= 0 && saved.controls[key] <= 100) ui.controls[key] = saved.controls[key];
     if (saved.qualityForm && typeof saved.qualityForm === 'object') ui.qualityForm = {...ui.qualityForm, ...saved.qualityForm};
     if (saved.qualityVotes && typeof saved.qualityVotes === 'object') ui.qualityVotes = saved.qualityVotes;
   }
 } catch { ui.editorStorageError = true; }
 window.addEventListener('pagehide', persistEditor);
+const documentStorageKey = 'voicework-document-v1';
+let documentSaveTimer, documentPollTimer, documentPolling = false, documentPageClosing = false;
+function persistDocument() {
+  clearTimeout(documentSaveTimer);
+  try {
+    const saved = JSON.stringify({mode: ui.writeMode, document: ui.document});
+    if (saved.length > DOCUMENT_STORAGE_LIMIT) throw new Error('Document storage limit exceeded.');
+    localStorage.setItem(documentStorageKey, saved); ui.documentStorageError = false;
+  } catch { ui.documentStorageError = true; }
+  updateDocumentStorageNotice();
+}
+function queueDocumentSave() { clearTimeout(documentSaveTimer); documentSaveTimer = setTimeout(persistDocument, 350); }
+function updateDocumentStorageNotice() {
+  const notice = document.querySelector('#document-storage-error');
+  if (notice) { notice.hidden = !ui.documentStorageError; notice.textContent = 'Browser storage is unavailable or full. Download your source and edited draft before refreshing or closing this page.'; }
+}
+try {
+  const raw = localStorage.getItem(documentStorageKey);
+  if (raw && raw.length > DOCUMENT_STORAGE_LIMIT) throw new Error('Document storage is too large.');
+  const saved = JSON.parse(raw || 'null');
+  if (saved) { ui.document = restoreDocument(saved.document); ui.writeMode = saved.mode === 'document' ? 'document' : 'message'; }
+} catch { ui.documentStorageError = true; }
+window.addEventListener('beforeunload', () => {documentPageClosing = true; persistDocument();});
+window.addEventListener('pagehide', () => {documentPageClosing = true; persistDocument();});
+window.addEventListener('pageshow', () => {documentPageClosing = false;});
 
 const uid = (prefix = 'field') => `${prefix}-${++nextId}`;
 const plural = (number, single, multiple = `${single}s`) => `${number} ${number === 1 ? single : multiple}`;
@@ -135,11 +161,11 @@ async function api(path, method = 'GET', body) {
   }
   let response;
   try { response = await fetch(`/api${path}`, options); }
-  catch { throw new Error('The local workspace is not responding. Keep the Voicework server running, then try again.'); }
+  catch { const error = new Error('The local workspace is not responding. Keep the Voicework server running, then try again.'); error.networkError = true; throw error; }
   let data;
   try { data = await response.json(); }
   catch { throw new Error('The server returned an unreadable response. Please try again.'); }
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status}).`);
+  if (!response.ok) {const error = new Error(data.error || `Request failed (${response.status}).`); error.status = response.status; throw error;}
   return data;
 }
 async function refresh(renderPage = true) {
@@ -179,12 +205,12 @@ function contextEditor(seed = ui.context, options = {}) {
   const values = { channel: 'work', audience: '', intent: '', stakes: '', relationship: '', scenario: '', ...seed };
   const controls = {};
   const contextId = uid('contexts');
-  const channel = controls.channel = input({ value: values.channel, list: contextId, maxlength: 80, placeholder: 'work, personal, community…' });
-  const audience = controls.audience = input({ value: values.audience, maxlength: 160, placeholder: 'A teammate, close friend…' });
+  const channel = controls.channel = input({ value: values.channel, list: contextId, maxlength: 200, placeholder: 'work, personal, community…' });
+  const audience = controls.audience = input({ value: values.audience, maxlength: 200, placeholder: 'A teammate, close friend…' });
   const wrap = el('div', { class: 'context-editor' }, el('div', { class: 'form-row' }, field('Context', channel), field('Who is this for?', audience, 'optional')), el('datalist', { id: contextId }, ['work', 'personal', 'community', 'public writing'].map(value => el('option', { value }))));
   const more = el('div', {}, el('div', { class: 'form-row' },
     field('What should it achieve?', controls.intent = input({ value: values.intent, maxlength: 200, placeholder: 'Ask for a decision, reconnect…' })),
-    field('Relationship', controls.relationship = input({ value: values.relationship, maxlength: 160, placeholder: 'Peer, manager, close friend…' }))),
+    field('Relationship', controls.relationship = input({ value: values.relationship, maxlength: 200, placeholder: 'Peer, manager, close friend…' }))),
     field('What is at stake?', controls.stakes = input({ value: values.stakes, maxlength: 200, placeholder: 'Routine update, difficult conversation…' })));
   const scenario = field(options.scenarioLabel || 'Situation', controls.scenario = el('textarea', { value: values.scenario, rows: 2, maxlength: 2000, placeholder: 'The situation and facts your writing needs to fit.', style: 'min-height: 70px' }), 'optional');
   if (options.scenario) wrap.append(scenario);
@@ -552,23 +578,230 @@ async function generateCurrentDraft() {
     toast('Draft ready. Edit freely; nothing is learned unless you ask to remember it.');
   } finally { ui.generating = false; render(); }
 }
+function draftControls(values, onChange, disabled = false) {
+  const controls = el('div', {class: 'control-grid'});
+  for (const [key, title, left, right] of [['polish', 'Polish', 'Light touch', 'Substantial rewrite'], ['detail', 'Detail', 'Essentials', 'Full context'], ['warmth', 'Warmth', 'Matter-of-fact', 'More personal'], ['assertiveness', 'Assertiveness', 'Gentle', 'Direct']]) {
+    const output = el('output', {class: 'control-value'}, values[key]);
+    const range = input({type: 'range', min: 0, max: 100, step: 1, value: values[key], disabled, 'aria-label': title, onInput: event => {values[key] = Number(event.target.value); output.textContent = event.target.value; onChange({...values});}});
+    range.id = uid('range'); output.setAttribute('for', range.id);
+    controls.append(el('div', {class: 'control-row'}, el('label', {class: 'control-label', for: range.id}, title, output), range, el('div', {class: 'range-labels'}, el('span', {}, left), el('span', {}, right))));
+  }
+  const structure = select([['auto', 'Use my preferences'], ['prose', 'Prose'], ['bullets', 'Bullets']], values.structure, {disabled, onChange: event => {values.structure = event.target.value; onChange({...values});}});
+  const register = select([['auto', 'Fit the context'], ['casual', 'Casual'], ['professional', 'Professional'], ['formal', 'Formal']], values.register || 'auto', {disabled, onChange: event => {values.register = event.target.value; onChange({...values});}});
+  return el('div', {}, controls, el('div', {class: 'form-row'}, field('Structure', structure), field('Register', register)), helper('These controls affect this draft. They do not create remembered preferences or authorize new facts.'));
+}
 function renderWrite() {
+  const mode = el('div', {class: 'segmented write-mode', role: 'group', 'aria-label': 'Writing mode'}, [['message', 'Message'], ['document', 'Whole document']].map(([value, label]) => el('button', {type: 'button', class: `segment ${ui.writeMode === value ? 'active' : ''}`, 'aria-pressed': String(ui.writeMode === value), onClick: () => {ui.writeMode = value; persistDocument(); render();}}, label)));
+  const pieces = ui.writeMode === 'document' ? renderDocumentWrite() : renderMessageWrite();
+  pieces.splice(1, 0, mode);
+  return pieces;
+}
+function changeDocument(changes) {
+  if (changes.context) {ui.documentContextPreview = null; document.querySelector('#document-context-preview')?.replaceChildren();}
+  ui.document = reviseDocument(ui.document, changes); queueDocumentSave(); refreshDocumentDiagnostics();
+}
+function guardDocumentPaste(control, limit) {
+  control.addEventListener('paste', event => {
+    const inserted = event.clipboardData?.getData('text/plain');
+    if (typeof inserted === 'string' && control.value.length - (control.selectionEnd - control.selectionStart) + inserted.length > limit) {
+      event.preventDefault(); toast(`This paste exceeds ${limit.toLocaleString()} characters. Nothing was pasted or truncated.`, true);
+    }
+  });
+}
+function downloadDocumentText(text, filename) {
+  const url = URL.createObjectURL(new Blob([text], {type: 'text/plain;charset=utf-8'}));
+  const link = el('a', {href: url, download: filename}); document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function scheduleDocumentPoll(delay = 1500) {
+  clearTimeout(documentPollTimer);
+  if (activeDocumentJob(ui.document.job)) documentPollTimer = setTimeout(pollDocumentJob, delay);
+}
+async function pollDocumentJob() {
+  if (documentPolling || !activeDocumentJob(ui.document.job)) return;
+  documentPolling = true;
+  const id = ui.document.job.id;
+  try {
+    const response = await api(`/documents/${encodeURIComponent(id)}`);
+    if (ui.document.job?.id !== id) return;
+    const kind = ui.document.job.kind;
+    ui.document = acceptDocumentJob(ui.document, response); persistDocument();
+    if (response.status === 'complete') {
+      if (kind === 'generate' && ui.route === 'write' && ui.writeMode === 'document') render();
+      else refreshDocumentDiagnostics(true);
+      toast(ui.document.error || (kind === 'generate' ? 'Document ready. Review the source, wording and checks before using it.' : documentChecksCurrent(ui.document) ? 'Checks returned. Review potential issues before using your draft.' : 'Checks returned for an earlier edit. Run checks again for your current text.'), Boolean(ui.document.error));
+    } else if (response.status === 'failed') {
+      if (ui.route === 'write' && ui.writeMode === 'document') render();
+      toast(ui.document.error, true);
+    } else refreshDocumentDiagnostics();
+  } catch (error) {
+    if (documentPageClosing || ui.document.job?.id !== id) return;
+    if (error.networkError) {
+      ui.document.error = 'Connection interrupted. Retrying this request in a few seconds; your source and draft are preserved.';
+      persistDocument(); refreshDocumentDiagnostics();
+    } else {
+      ui.document.error = `${error.message} If the server restarted, start a new request. Your source and draft are preserved.`;
+      ui.document.job.status = 'failed'; persistDocument();
+      if (ui.route === 'write' && ui.writeMode === 'document') render();
+    }
+  } finally { documentPolling = false; scheduleDocumentPoll(ui.document.error ? 5000 : 1500); }
+}
+async function startDocumentJob(kind) {
+  if (ui.documentStarting || activeDocumentJob(ui.document.job)) return;
+  const doc = ui.document;
+  if (!doc.source.trim()) throw new Error('Paste a document or choose a Markdown or text file first.');
+  if (doc.source.length > DOCUMENT_SOURCE_LIMIT) throw new Error('The source exceeds 120,000 characters. Nothing was truncated.');
+  if (kind === 'check' && !doc.text.trim()) throw new Error('Add or generate a draft before checking it.');
+  if (doc.text.length > DOCUMENT_OUTPUT_LIMIT) throw new Error('The draft exceeds 240,000 characters. Nothing was truncated.');
+  const snapshot = {kind, source: doc.source, text: kind === 'check' ? doc.text : '', context: {...doc.context}, controls: {...doc.controls}, revision: doc.revision};
+  ui.documentStarting = true; ui.documentReplacePrompt = false; ui.document.error = ''; render();
+  try {
+    const body = {context: snapshot.context, source: snapshot.source, controls: snapshot.controls};
+    if (kind === 'check') body.text = snapshot.text;
+    const response = await api(kind === 'check' ? '/document-checks' : '/documents', 'POST', body);
+    if (!validDocumentJob(response)) throw new Error('The server returned an invalid document job. Your source and current draft are preserved.');
+    ui.document.job = {...snapshot, id: response.id, status: response.status};
+    ui.document = acceptDocumentJob(ui.document, response);
+    persistDocument(); scheduleDocumentPoll(0);
+  } catch (error) { ui.document.error = error.message; persistDocument(); throw error; }
+  finally { ui.documentStarting = false; render(); }
+}
+function trainedContextPicker(onSelect, disabled = false) {
+  const trained = [...activeLanguageLessons(), ...state.samples.filter(sample => sample.status === 'confirmed' && !sample.held_out), ...(state.feedback || []), ...(state.priors || []).filter(prior => prior.confirmed)];
+  const contexts = [...new Map(trained.map(lesson => {const context = cleanDocumentContext(lesson.context); return [JSON.stringify(context), context];})).values()];
+  if (!contexts.length) return helper('No trained contexts yet. Set the audience and purpose below; samples and lessons are optional.');
+  const picker = select([['', 'Choose a context you have taught…'], ...contexts.map((context, index) => [String(index), [context.channel, context.audience, context.intent].filter(Boolean).join(' · ')])], '', {disabled, onChange: event => {if (event.target.value !== '') onSelect({...contexts[Number(event.target.value)]});}});
+  return field('Use a trained context', picker, 'optional');
+}
+function documentContextReport(result) {
+  const report = result?.context_report;
+  const body = el('div', {}, helper('Context matching explains which guidance was supplied. It does not measure voice fidelity.'));
+  if (report && typeof report === 'object') {
+    const context = report.requested_context || report.context || result.source_context;
+    if (context) body.append(contextPills(context));
+    if (report.counts) body.append(el('p', {class: 'document-guidance-counts'}, `${report.counts.authored_examples || 0} authored examples · ${report.counts.language_lessons || 0} language lessons · ${report.counts.feedback || 0} saved preferences · ${report.counts.priors || 0} confirmed priors`));
+    for (const [key, label] of [['changes', 'Context changes'], ['matches', 'Recognized matches'], ['warnings', 'Scope warnings'], ['supplied', 'Supplied guidance']]) {
+      if (report[key] && (!Array.isArray(report[key]) || report[key].length)) body.append(el('h3', {}, label), el('pre', {class: 'provenance-text'}, typeof report[key] === 'string' ? report[key] : JSON.stringify(report[key], null, 2)));
+    }
+    const remainder = Object.fromEntries(Object.entries(report).filter(([key]) => !['requested_context', 'context', 'changes', 'matches', 'warnings', 'supplied', 'counts'].includes(key)));
+    if (Object.keys(remainder).length) body.append(el('pre', {class: 'provenance-text'}, JSON.stringify(remainder, null, 2)));
+  } else body.append(helper('No context matching report was returned for this draft.'));
+  const sources = (Array.isArray(result?.evidence_ids) ? result.evidence_ids : []).map(id => state.samples.find(sample => String(sample.id) === String(id))).filter(Boolean);
+  body.append(sources.length ? el('ul', {class: 'evidence-list'}, sources.map(sample => el('li', {}, sample.title || 'Untitled authored sample'))) : helper('No confirmed authored sample references were returned.'));
+  for (const warning of Array.isArray(result?.warnings) ? result.warnings : []) body.append(helper(warning));
+  return details('Context, supplied guidance & limitations', body);
+}
+function documentReviewContents() {
+  const doc = ui.document, checking = ui.documentStarting || activeDocumentJob(doc.job);
+  const current = documentChecksCurrent(doc), checks = doc.result?.checks;
+  const summary = !checks ? 'Not checked' : !current ? 'Checks need rerunning' : checks.status === 'not_checked' ? 'Not checked' : checks.status === 'checked' ? 'Checks returned · review before use' : 'Review required';
+  const content = el('div', {}, el('div', {class: 'review-top'}, el('h3', {}, 'Content & voice review'), badge(summary, current && checks?.status === 'checked' ? 'muted' : 'amber')), helper('Checks flag potential content and voice issues. They can miss omissions or factual changes and do not guarantee fidelity. Human review is required before use.'));
+  if (checks && !current) content.append(el('p', {class: 'document-stale'}, checking ? 'A request is in progress. Previous checks do not validate the current draft.' : 'The source, draft, context or controls changed after these checks. Run checks again for the current version.'));
+  if (checks) {
+    if (checks.limitation) content.append(helper(checks.limitation));
+    for (const warning of Array.isArray(checks.warnings) ? checks.warnings : []) content.append(helper(warning));
+    if (Number.isInteger(checks.review?.units_completed) && Number.isInteger(checks.review?.units_total)) content.append(helper(`Review coverage: ${checks.review.units_completed} of ${checks.review.units_total} review units completed${checks.review.status === 'not_checked' ? ' · semantic review not performed' : ''}.`));
+    const columns = el('div', {class: 'document-checks-grid'});
+    for (const [key, title] of [['content', 'Content preservation'], ['voice', 'Voice & presentation']]) {
+      const check = checks[key];
+      const issues = Array.isArray(check?.issues) ? check.issues : [];
+      const column = el('section', {class: 'document-check-column'}, el('h4', {}, title), helper(!current ? 'Earlier version · not current' : check?.status === 'not_checked' || !check ? 'Not checked' : check.status === 'checked' ? 'Review returned findings' : 'Review required'));
+      if (!issues.length) column.append(helper(check?.status === 'not_checked' || !check ? 'No substantive check was performed.' : 'No potential issues were reported. This does not establish correctness.'));
+      else column.append(el('ul', {class: 'document-issues'}, issues.map(issue => el('li', {}, el('strong', {}, `${issue?.severity || 'review'}${issue?.section ? ` · ${issue.section}` : ''}`), el('p', {}, issue?.message || 'Review this passage.'), issue?.code && el('span', {class: 'helper'}, issue.code)))));
+      columns.append(column);
+    }
+    content.append(columns);
+  }
+  const recheck = button(checking ? 'Request in progress…' : checks ? 'Run checks again' : 'Check current draft', () => busy(recheck, () => startDocumentJob('check'), 'Starting…'), 'small', 'shield');
+  recheck.disabled = checking || !doc.text.trim() || !doc.source.trim();
+  content.append(el('div', {class: 'document-review-actions'}, recheck, helper('Checking never saves a training lesson or quality vote.')));
+  if (checks?.source_hash || checks?.draft_hash) content.append(details('Checked version fingerprints', el('div', {}, helper(`Source: ${checks.source_hash || 'unavailable'}`), helper(`Draft: ${checks.draft_hash || 'unavailable'}`))));
+  return content;
+}
+function documentJobContents() {
+  const doc = ui.document;
+  if (ui.documentStarting) return helper('Starting a document request… Your source and current draft remain saved locally.');
+  if (activeDocumentJob(doc.job)) return el('div', {class: 'document-job-notice'}, el('strong', {}, `${doc.job.kind === 'check' ? 'Checking your current draft' : 'Rewriting your document'}…`), helper(doc.error || 'You can use another tab in Voicework while this runs. Refreshing reconnects to this request while the server is running.'));
+  if (doc.error) {
+    const retry = button('Retry request status', () => { if (!ui.document.job) return; ui.document.job.status = 'pending'; ui.document.error = ''; persistDocument(); render(); scheduleDocumentPoll(0); }, 'small');
+    return el('div', {class: 'inline-error'}, el('p', {}, doc.error), doc.job && retry);
+  }
+  return null;
+}
+function documentEvidenceContents() {
+  const doc = ui.document;
+  return doc.result ? [documentContextReport(doc.result), doc.checkedSource && details('Preserved source used for the last result', el('div', {}, helper('This snapshot remains unchanged when you edit the source field above.'), el('textarea', {class: 'document-preserved-source', readonly: true, rows: 8, value: doc.checkedSource, 'aria-label': 'Preserved source for last result'})))] : [];
+}
+function refreshDocumentDiagnostics(includeEvidence = false) {
+  const working = ui.documentStarting || activeDocumentJob(ui.document.job);
+  const submit = document.querySelector('#document-submit');
+  if (submit) {submit.disabled = working; submit.textContent = working ? 'Request in progress…' : state.settings.provider === 'codex' ? 'Rewrite whole document' : 'Rehearse document rewrite';}
+  const file = document.querySelector('#document-file'); if (file) file.disabled = working;
+  const evidence = document.querySelector('#document-evidence');
+  if (evidence && includeEvidence) {evidence.replaceChildren(...documentEvidenceContents().filter(Boolean)); evidence.hidden = !ui.document.result;}
+  document.querySelector('#document-review')?.replaceChildren(documentReviewContents());
+  document.querySelector('#document-job-status')?.replaceChildren(documentJobContents() || '');
+}
+function renderDocumentWrite() {
+  const doc = ui.document;
+  const working = ui.documentStarting || activeDocumentJob(doc.job);
+  const generating = ui.documentStarting || (activeDocumentJob(doc.job) && doc.job.kind === 'generate');
+  const context = contextEditor(doc.context, {remember: false, onChange: value => changeDocument({context: value})});
+  Object.values(context.controls).forEach(control => { control.disabled = generating; });
+  const count = helper(`${doc.source.length.toLocaleString()} / 120,000 characters`);
+  const source = el('textarea', {class: 'document-source', value: doc.source, rows: 13, maxlength: DOCUMENT_SOURCE_LIMIT, disabled: generating, 'aria-label': 'Original document source', placeholder: '# Document title\n\nPaste the complete Markdown or plain-text document here.', onInput: event => {changeDocument({source: event.target.value}); count.textContent = `${event.target.value.length.toLocaleString()} / 120,000 characters`;}});
+  guardDocumentPaste(source, DOCUMENT_SOURCE_LIMIT);
+  const file = input({id: 'document-file', type: 'file', accept: '.md,.txt,text/plain,text/markdown', class: 'file-input', disabled: working, 'aria-label': 'Read a local Markdown or text document'});
+  file.addEventListener('change', async () => {
+    const chosen = file.files?.[0]; if (!chosen) return;
+    try {
+      if (!/\.(md|txt)$/i.test(chosen.name)) throw new Error('Choose a .md or .txt file. Other formats are not supported.');
+      if (chosen.size > DOCUMENT_SOURCE_LIMIT * 4) throw new Error('This file is too large. Use a document up to 120,000 characters. Nothing was imported.');
+      const text = await chosen.text();
+      if (text.length > DOCUMENT_SOURCE_LIMIT) throw new Error('This document exceeds 120,000 characters. Nothing was imported or truncated.');
+      if (text.includes('\0')) throw new Error('This file is not plain text. Export a UTF-8 Markdown or text copy first.');
+      changeDocument({source: text, sourceName: chosen.name}); persistDocument(); render(); toast('File read locally. Review the source and context before generating.');
+    } catch (error) { toast(error.message, true); } finally { file.value = ''; }
+  });
+  const trained = trainedContextPicker(value => {changeDocument({context: value}); persistDocument(); render();}, generating);
+  const preview = button('Preview matching guidance', () => busy(preview, async () => {
+    const selectedContext = JSON.stringify(ui.document.context);
+    const report = await api('/context/resolve', 'POST', {context: {...ui.document.context}});
+    if (selectedContext !== JSON.stringify(ui.document.context)) {toast('Context changed while previewing. Preview the current context again.', true); return;}
+    ui.documentContextPreview = report.context_report || report;
+    document.querySelector('#document-context-preview')?.replaceChildren(documentContextReport({context_report: ui.documentContextPreview}));
+  }, 'Matching…'), 'small'); preview.disabled = generating;
+  const previewArea = el('div', {id: 'document-context-preview'}, ui.documentContextPreview && documentContextReport({context_report: ui.documentContextPreview}));
+  const adjustments = draftControls({...doc.controls}, value => changeDocument({controls: value}), generating);
+  const submit = button(working ? 'Request in progress…' : state.settings.provider === 'codex' ? 'Rewrite whole document' : 'Rehearse document rewrite', null, 'primary', 'write'); submit.type = 'submit'; submit.id = 'document-submit'; submit.disabled = working;
+  const sourceDownload = button('Download source', () => downloadDocumentText(ui.document.source, (ui.document.sourceName || 'document-source.md').replace(/[\/\\]/g, '_')), 'small quiet', 'download'); sourceDownload.disabled = !doc.source; source.addEventListener('input', () => {sourceDownload.disabled = !ui.document.source;});
+  const form = el('form', {class: 'panel document-input'}, panelHeading('Your original document', 'Plain text or Markdown. The complete source stays separate from the draft.'), el('div', {class: 'panel-body'}, field('Read a local file', file), helper('Choosing a file reads it in this browser. Generation or checks send its text to the local server and, in Codex mode, to your configured Codex provider.'), field('Or paste the document', source), el('div', {class: 'document-source-meta'}, count, sourceDownload), doc.sourceName && helper(`Local file: ${doc.sourceName}`), trained, context.node, el('div', {class: 'document-context-preview'}, preview, previewArea), details('Adjust this document', adjustments)), el('div', {class: 'panel-foot'}, helper('Preserve the substance. Review every important change.'), submit));
+  form.addEventListener('submit', event => {event.preventDefault(); if (ui.documentStarting || activeDocumentJob(ui.document.job)) return; if (ui.document.text) {ui.documentReplacePrompt = true; render(); return;} busy(submit, () => startDocumentJob('generate'), 'Starting…');});
+  if (ui.documentReplacePrompt) {
+    const replace = button('Generate a replacement', () => busy(replace, () => startDocumentJob('generate'), 'Starting…'), 'small primary');
+    form.append(el('div', {class: 'replace-notice'}, el('strong', {}, 'Replace the current document draft?'), helper('Download or copy any edits you want to keep. The current draft will be replaced only after the new generation succeeds; your source stays separate.'), el('div', {class: 'button-group'}, button('Keep current draft', () => {ui.documentReplacePrompt = false; render();}, 'small'), replace)));
+  }
+  const output = el('section', {class: 'panel document-output', 'aria-label': 'Editable document result'}, panelHeading('Your document draft', 'Edit, review, and export the current text.', doc.result && badge(doc.result.provider === 'codex' ? 'Codex' : 'Offline rehearsal', doc.result.provider === 'codex' ? '' : 'amber')));
+  const textCount = helper(`${doc.text.length.toLocaleString()} / 240,000 characters · Edits stay in this browser.`);
+  const draft = el('textarea', {class: 'draft-editor document-editor', value: doc.text, rows: 22, maxlength: DOCUMENT_OUTPUT_LIMIT, readonly: generating, 'aria-label': 'Edit your document draft', placeholder: 'Your whole-document draft will appear here. You can also paste an existing revision to check against the source.', onInput: event => {changeDocument({text: event.target.value}); textCount.textContent = `${event.target.value.length.toLocaleString()} / 240,000 characters · Edits stay in this browser.`;}});
+  guardDocumentPaste(draft, DOCUMENT_OUTPUT_LIMIT);
+  const copy = button('Copy current text', async () => {try {await navigator.clipboard.writeText(ui.document.text); toast('Current edited text copied. No training was saved.');} catch {toast('Clipboard access was denied. Select the draft and copy it directly.', true);}}, 'small', 'copy');
+  const downloadMd = button('Download .md', () => downloadDocumentText(ui.document.text, documentDownloadName(ui.document.sourceName, 'md')), 'small', 'download');
+  const downloadTxt = button('Download .txt', () => downloadDocumentText(ui.document.text, documentDownloadName(ui.document.sourceName, 'txt')), 'small');
+  const updateExport = () => {for (const control of [copy, downloadMd, downloadTxt]) control.disabled = !ui.document.text;}; updateExport(); draft.addEventListener('input', updateExport);
+  output.append(draft, el('div', {class: 'draft-edit-toolbar'}, textCount, el('div', {class: 'button-group'}, copy, downloadMd, downloadTxt), helper('Whole documents are not sent to “Remember this correction.” Teach a specific preference in Practice when useful.')),
+    el('div', {class: 'document-review', id: 'document-review'}, documentReviewContents()));
+  output.append(el('div', {class: 'evidence', id: 'document-evidence', hidden: !doc.result}, documentEvidenceContents()));
+  const pieces = [pageHeading('Writing / whole documents', 'Keep the substance. Find your voice.', 'Rewrite a complete document in context, then inspect content and voice separately.')];
+  if (state.settings.provider !== 'codex') pieces.push(callout('Offline rehearsal', 'This walkthrough uses simple text rules. Content and voice are not substantively checked, and the result does not demonstrate learned writing quality.', 'warning'));
+  pieces.push(el('div', {id: 'document-storage-error', class: 'inline-error', hidden: !ui.documentStorageError}, 'Browser storage is unavailable or full. Download your source and edited draft before refreshing or closing this page.'), el('div', {id: 'document-job-status', role: 'status', 'aria-live': 'polite'}, documentJobContents()), el('div', {class: 'write-layout document-layout'}, form, output), el('p', {class: 'helper local-draft-note'}, 'Source, context, output and the current request ID stay in this browser. Nothing becomes an authored sample, lesson or quality vote automatically. Review before using the document.'));
+  return pieces;
+}
+function renderMessageWrite() {
   const context = contextEditor(ui.context, { scenario: false });
   const brief = el('textarea', { class: 'write-brief', placeholder: 'What do you want to say? Paste the message you’re answering, describe the facts, or start with a rough draft.', required: true, maxlength: 15000, value: ui.brief, disabled: ui.generating, onInput: event => { ui.brief = event.target.value; persistEditor(); } });
-  const controls = el('div', { class: 'control-grid' });
-  for (const [key, title, left, right] of [['polish', 'Polish', 'Light touch', 'Substantial rewrite'], ['detail', 'Detail', 'Essentials', 'Full context'], ['warmth', 'Warmth', 'Matter-of-fact', 'More personal'], ['assertiveness', 'Assertiveness', 'Gentle', 'Direct']]) {
-    const output = el('output', { class: 'control-value' }, ui.controls[key]);
-    const range = input({ type: 'range', min: 0, max: 100, step: 1, value: ui.controls[key], 'aria-label': title, onInput: event => { ui.controls[key] = Number(event.target.value); output.textContent = event.target.value; persistEditor(); } });
-    range.id = uid('range'); output.setAttribute('for', range.id);
-    controls.append(el('div', { class: 'control-row' }, el('label', { class: 'control-label', for: range.id }, title, output), range, el('div', { class: 'range-labels' }, el('span', {}, left), el('span', {}, right))));
-  }
-  const structureButtons = [];
-  const structure = el('div', { class: 'segmented', role: 'group', 'aria-label': 'Draft structure' }, [['auto', 'Use my preferences'], ['prose', 'Prose'], ['bullets', 'Bullets']].map(([value, label]) => {
-    const control = el('button', { type: 'button', class: `segment ${ui.controls.structure === value ? 'active' : ''}`, 'aria-pressed': String(ui.controls.structure === value), onClick: () => { ui.controls.structure = value; structureButtons.forEach(([key, target]) => { target.classList.toggle('active', key === value); target.setAttribute('aria-pressed', String(key === value)); }); persistEditor(); } }, label);
-    structureButtons.push([value, control]); return control;
-  }));
+  const adjustments = draftControls(ui.controls, value => { ui.controls = value; persistEditor(); });
   const submit = button(ui.generating ? 'Writing…' : state.settings.provider === 'codex' ? 'Draft this message' : 'Preview a rehearsal draft', null, 'primary', 'write'); submit.type = 'submit'; submit.disabled = ui.generating;
-  const form = el('form', { class: 'panel' }, panelHeading('What are you trying to say?', 'Start with a real message. Samples are optional.'), el('div', { class: 'panel-body' }, field('Your message or rough draft', brief), context.node, details('Adjust this draft', el('div', {}, controls, el('div', {class: 'field'}, el('span', {class: 'field-label'}, 'Structure'), structure), helper('These controls affect this draft. They do not create remembered preferences.')))), el('div', { class: 'panel-foot' }, helper('Review the facts and wording before sending.'), submit));
+  const form = el('form', { class: 'panel' }, panelHeading('What are you trying to say?', 'Start with a real message. Samples are optional.'), el('div', { class: 'panel-body' }, field('Your message or rough draft', brief), context.node, details('Adjust this draft', adjustments)), el('div', { class: 'panel-foot' }, helper('Review the facts and wording before sending.'), submit));
   form.addEventListener('submit', event => { event.preventDefault();
     if (draftHasEdits() || ui.rememberDraft) { ui.replacePrompt = true; render(); return; }
     busy(submit, generateCurrentDraft, 'Writing…');
@@ -809,7 +1042,7 @@ function renderWholeVoiceEvaluation() {
   return [pageHeading('Evaluation / fewer edits, better fit','Check whether it sounds more like you.','Judge comparable drafts blind, then inspect what helped.'),el('div',{class:'primary-column'},cases,setup,results)];
 }
 
-try { await refresh(); }
+try { await refresh(); if (activeDocumentJob(ui.document.job)) scheduleDocumentPoll(0); }
 catch (error) {
   app.replaceChildren(el('main', { class: 'boot-state', id: 'main' }, el('span', { class: 'brand-mark' }, 'v.'), el('h1', {}, 'Your workspace is offline.'), el('p', { class: 'helper', style: 'max-width: 360px; text-align: center; margin-bottom: 20px' }, error.message), button('Try again', () => location.reload(), 'primary', 'refresh')));
   app.removeAttribute('aria-busy');
