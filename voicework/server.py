@@ -14,6 +14,7 @@ from .store import Store, text_field
 from .context import PriorStore, infer_context
 from .evaluation import EvaluationStore
 from .discovery_jobs import DiscoveryJobs
+from .language import LanguageLessonStore, validate_focus
 
 MAX_BODY_BYTES = 8 * 1024 * 1024
 
@@ -63,6 +64,7 @@ class VoiceworkServer(ThreadingHTTPServer):
         self.store = store
         self.provider = provider
         self.priors = PriorStore(store.path)
+        self.language_lessons = LanguageLessonStore(store.path)
         self.evaluations = EvaluationStore(store.path)
         self.discovery_jobs = DiscoveryJobs(store)
         self.web_root = Path(web_root).resolve()
@@ -224,6 +226,9 @@ class Handler(BaseHTTPRequestHandler):
         channel = context.get("channel", "work").strip().casefold()
         return [{**item, "is_prior": True} for item in priors if item["context"].get("channel", "work").strip().casefold() == channel]
 
+    def _language_preferences(self, context):
+        return [{**item, "is_language_lesson": True} for item in self.server.language_lessons.matching(context)]
+
     def _route(self, path, query, body):
         store, provider = self.server.store, self.server.provider
         method = "GET" if self.command == "HEAD" else self.command
@@ -231,8 +236,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True})
         if method == "GET" and path == "/api/state":
             samples, rounds, feedback = store.samples(), store.rounds(), store.feedback()
+            lessons = self.server.language_lessons.list()
             return self._json({"samples": samples, "rounds": rounds, "feedback": feedback,
-                "profile": build_profile(samples, feedback),
+                "profile": build_profile(samples, feedback, lessons), "language_lessons": lessons,
                 "priors": self.server.priors.list(), "evaluations": self.server.evaluations.list_cases(),
                 "evaluation_summary": self.server.evaluations.summary(), "discovery_jobs": self.server.discovery_jobs.list(),
                 "settings": {"provider": getattr(provider, "mode", "offline"), "model": getattr(provider, "model", None)},
@@ -241,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
                 "capabilities": {"codex_available": bool(provider.available()), "local_scan": True,
                                  "browser_import": True, **scan_capabilities()}, "token": self.server.token})
         if method == "GET" and path == "/api/export":
-            markdown = export_markdown(store.samples(), store.feedback(), query.get("examples") == ["1"])
+            markdown = export_markdown(store.samples(), store.feedback(), query.get("examples") == ["1"], self.server.language_lessons.list())
             priors = self.server.priors.list(confirmed_only=True)
             if priors:
                 markdown += "\n## Reviewed prior context (not authored samples)\n"
@@ -250,6 +256,19 @@ class Handler(BaseHTTPRequestHandler):
                     packet = {key: prior[key] for key in ("label", "text", "context", "source")}
                     markdown += "\n" + "\n".join("> " + line.replace("<", "&lt;").replace(">", "&gt;") for line in json.dumps(packet, ensure_ascii=False, indent=2).splitlines()) + "\n"
             return self._json({"markdown": markdown, "filename": "VOICE_PROFILE.md"})
+        if method == "GET" and path == "/api/language-lessons":
+            return self._json({"language_lessons": self.server.language_lessons.list()})
+        if method == "POST" and path == "/api/language-lessons":
+            return self._json({"lesson": self.server.language_lessons.add(body)}, 201)
+        if path.startswith("/api/language-lessons/") and method in {"PATCH", "DELETE"}:
+            ident = path[len("/api/language-lessons/"):]
+            if not ident or "/" in ident or len(ident) > 100:
+                raise HTTPError(404, "Language lesson not found")
+            if method == "PATCH":
+                return self._json({"lesson": self.server.language_lessons.update(ident, body)})
+            self._fields(body, set())
+            self.server.language_lessons.delete(ident)
+            return self._json({"ok": True})
         if method == "GET" and path == "/api/priors":
             return self._json({"priors": self.server.priors.list()})
         if method == "POST" and path == "/api/priors":
@@ -300,7 +319,7 @@ class Handler(BaseHTTPRequestHandler):
             context = validate_context(body.get("context"))
             brief = text_field(body.get("brief", ""), "brief", 15000, True)
             evidence = retrieve(store.samples(), context)
-            preferences = contextual_preferences(store.feedback(), context) + self._prior_preferences(context)
+            preferences = contextual_preferences(store.feedback(), context) + self._prior_preferences(context) + self._language_preferences(context)
             if not self.server.generation_slots.acquire(blocking=False):
                 raise HTTPError(429, "Generation is busy; try again shortly")
             try:
@@ -340,20 +359,21 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 self.server.discovery_slot.release()
         if method == "POST" and path in {"/api/rounds", "/api/draft"}:
-            self._fields(body, {"context"} if path == "/api/rounds" else {"context", "brief", "controls"})
+            self._fields(body, {"context", "focus"} if path == "/api/rounds" else {"context", "brief", "controls"})
             context = validate_context(body.get("context"))
+            focus = validate_focus(body.get("focus", "mixed")) if path == "/api/rounds" else None
             brief = text_field(body.get("brief", ""), "brief", 15000, True) if path == "/api/draft" else None
             controls = validate_controls(body.get("controls")) if brief is not None else None
             evidence = retrieve(store.samples(), context)
-            preferences = contextual_preferences(store.feedback(), context) + self._prior_preferences(context)
+            preferences = contextual_preferences(store.feedback(), context) + self._prior_preferences(context) + self._language_preferences(context)
             if not self.server.generation_slots.acquire(blocking=False):
                 raise HTTPError(429, "Two generations are already running; try again shortly")
             try:
                 if path == "/api/rounds":
-                    generated = provider.generate_round(context, evidence, preferences)
+                    generated = provider.generate_round(context, evidence, preferences, focus=focus)
                     if not isinstance(generated, dict):
                         raise ValueError("Provider returned an invalid round")
-                    item = store.add_round(context, generated, [s["id"] for s in evidence])
+                    item = store.add_round(context, generated, [s["id"] for s in evidence], focus=focus)
                     return self._json({"round": item}, 201)
                 generated = provider.generate_draft(context, brief, controls, evidence, preferences)
                 if not isinstance(generated, dict):
@@ -367,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.generation_slots.release()
         if method == "POST" and path == "/api/feedback":
             feedback = store.add_feedback(body)
-            return self._json({"feedback": feedback, "profile": build_profile(store.samples(), store.feedback())}, 201)
+            return self._json({"feedback": feedback, "profile": build_profile(store.samples(), store.feedback(), self.server.language_lessons.list())}, 201)
         if method == "GET" and path in {"/", "/index.html", "/app.js", "/styles.css"}:
             name = "index.html" if path == "/" else path[1:]
             asset = self.server.web_root / name

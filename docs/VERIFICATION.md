@@ -1,8 +1,8 @@
-# Verification — 2026-10-12
+# Verification — 2026-10-13
 
 ## Passed
 
-- `python3 -m unittest discover -s tests -v`: **64 tests passed**, including live HTTP integration tests using temporary loopback servers.
+- `python3 -m unittest discover -s tests -q`: **75 tests passed**, including live HTTP integration tests using temporary loopback servers.
 - `node --test tests/test_browser_discovery.js`: **11 tests passed** for document identification, selection limits, import schema, long-text splitting, Unicode boundaries, rejected content, and permission boundaries.
 - Python byte-compilation and JavaScript syntax checks for the app, extension popup, service worker, and discovery module.
 - Synthetic API walkthroughs: authorship review, holdout exclusion, comparison feedback, presentation controls, portable export, deletion, atomic import, context inference, reviewed prior packets, blind ratings, and resumable discovery. Host, origin, content-type, and mutation-token checks passed.
@@ -14,6 +14,10 @@
 - Live `gpt-6-astra` with `xhigh` reasoning passed synthetic draft generation, two-option comparison generation, and six-field provisional context inference using the installed Codex app CLI **0.162.0-alpha.17.2**. This verifies live integration, not personal writing fidelity.
 - A live browser draft submitted through the app completed with a Codex result, preserved the synthetic brief, identified the absence of style evidence, and produced no browser console errors.
 - Executable selection and terminal-error classification regression tests cover `--codex-bin`, `VOICEWORK_CODEX_BIN`, and false authentication matches in catalog diagnostics.
+- Sample-free language teaching: with zero samples, a direct diction lesson preferring “use” over “utilize” changed a live Astra draft from the brief “We will utilize the checklist tomorrow” to “We will use the checklist tomorrow.” This synthetic check establishes that the lesson was applied, not personal fidelity.
+- Focused syntax practice generated a two-sentence option and a subordinate-clause alternative with the same facts. A chosen option, reason, and rewrite were saved and appeared in the portable profile alongside the separate diction lesson.
+- Browser checks covered direct-lesson creation, editing, disabling, re-enabling, and export exclusion while disabled. Export previews are cleared when workspace data refreshes, preventing revoked lessons from remaining in a stale preview.
+- Eleven new Python tests cover language-lesson persistence, validation, context isolation, revocation/deletion, zero-sample API and provider behavior, focus migration, and exclusion from the uncalibrated evaluation baseline. Practice at 390 × 844px had no horizontal overflow; the QA browser recorded no console errors.
 
 ## Not established
 
@@ -24,7 +28,7 @@
 - Context suggestions are provisional heuristics or optional model suggestions, not verified reconstruction of an original conversation or proof of authorship.
 - Model-weight fine-tuning, automated prompt optimization, source-family holdout grouping, and automated factuality verification are not implemented. The implemented learning is contextual retrieval and saved preference feedback.
 - No real personal corpus was seeded into the shipped repo or submitted to a model. QA uses synthetic data in a separate scratch directory. The user-facing app was restarted with its existing database preserved and showed an empty workspace.
-- No hosted deployment, remote GitHub repository, public release, or extension installation was created.
+- Source is published to the private repository [gavinjudd/voicework](https://github.com/gavinjudd/voicework). No hosted deployment, public release, or extension installation was created.
 
 ## Handoff
 

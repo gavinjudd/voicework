@@ -5,7 +5,8 @@ const ui = {
   route: routes[location.hash.slice(1)] ? location.hash.slice(1) : 'practice',
   filter: 'pending', context: { channel: 'work', audience: '', intent: '', stakes: '', relationship: '', scenario: '' },
   selections: new Map(), draft: null, brief: '', controls: { polish: 45, detail: 45, warmth: 50, assertiveness: 50, structure: 'auto' },
-  scanResult: null, scanRunning: null, exportText: '', includeExamples: false,
+  scanResult: null, scanRunning: null, exportText: '', includeExamples: false, practiceFocus: 'vernacular',
+  lessonDraft: {dimension: 'vernacular', guidance: '', preferred: '', avoided: ''},
 };
 let state;
 let nextId = 0;
@@ -113,6 +114,7 @@ async function api(path, method = 'GET', body) {
 }
 async function refresh(renderPage = true) {
   state = await api('/state');
+  ui.exportText = '';
   if (renderPage) render();
 }
 async function busy(control, callback, label = 'Saving…') {
@@ -186,27 +188,33 @@ function render() {
   app.removeAttribute('aria-busy');
   document.title = `${routes[ui.route]} · Voicework`;
 }
+const languageDimensions = {
+  vernacular: {label: 'Vernacular', plain: 'Everyday expressions', description: 'Contractions, idioms, and expressions you naturally use.', example: '“Sounds good” or “That works for me” — which would you actually say?', guidance: 'e.g. Use contractions and everyday expressions with friends. “Sounds good” feels natural; “That is acceptable” does not.', preferred: 'e.g. Sounds good to me', avoided: 'e.g. That is acceptable', coaching: 'Which expressions feel natural or borrowed?', note: 'e.g. “I say ‘sounds good,’ never ‘certainly.’ Keep the contractions.”'},
+  syntax: {label: 'Syntax', plain: 'Sentence structure', description: 'How you arrange ideas: clauses, fragments, and sentence openings.', example: 'Do you lead with the point, add a qualifier first, or use a short fragment?', guidance: 'e.g. Lead with the point, then explain why. Short fragments are fine in a text to a friend.', preferred: 'e.g. I can do Friday. Does that work?', avoided: 'e.g. If that works for you, Friday is a day on which I am available.', coaching: 'Which sentence shape fits how you think?', note: 'e.g. “Put the answer first. I would split that long sentence in two.”'},
+  diction: {label: 'Diction', plain: 'Word choice', description: 'The specific words you favor, their precision, and their level of formality.', example: '“Use” or “utilize”? Name the words you reach for and the ones you avoid.', guidance: 'e.g. Use concrete, ordinary words in work updates. Avoid corporate filler unless the technical term is necessary.', preferred: 'e.g. use, help, start', avoided: 'e.g. utilize, facilitate, commence', coaching: 'Which words would you choose or replace?', note: 'e.g. “Use ‘help’ instead of ‘facilitate.’ That adjective is too formal.”'},
+  rhythm: {label: 'Rhythm', plain: 'Pace and cadence', description: 'Sentence length, pauses, repetition, and how the writing sounds aloud.', example: 'A short statement. Then a longer thought. Or a smoother, more even flow?', guidance: 'e.g. Mix short and longer sentences. Give an important point its own beat, without making every line abrupt.', preferred: 'e.g. It needs work. The idea is good, but the timing is off.', avoided: 'e.g. It needs work. Good idea. Wrong time. Fix it.', coaching: 'Where should the writing slow down or land?', note: 'e.g. “Too many short sentences in a row. Let the second thought breathe.”'},
+};
+const practiceFocuses = {mixed: {label: 'Mixed', plain: 'Whole voice', description: 'Compare expressions, word choice, sentence structure, and cadence together.', example: 'Notice both what it says and how you would say it.', coaching: 'What sounds like you, and what would you change?', note: 'e.g. “A uses my words, but I would start with the answer and shorten the second sentence.”'}, ...languageDimensions};
+function activeLanguageLessons() { return (state.language_lessons || []).filter(lesson => lesson.enabled); }
 function journeyPanel() {
   const profile = state.profile || {};
+  const lessons = activeLanguageLessons().length;
   const confirmed = state.samples.filter(sample => sample.status === 'confirmed').length;
-  const feedbackCount = state.feedback.length;
   const xp = Number(profile.xp) || 0;
   return el('section', { class: 'panel panel-pad journey-panel', 'aria-label': 'Practice progress' },
     el('div', { class: 'journey-title' }, el('div', { class: 'section-title', style: 'margin-bottom: 19px' }, 'Your practice'), badge(`Level ${profile.level || 1}`, 'muted')),
     el('div', { class: 'journey-number' }, xp, el('small', {}, 'contribution XP')),
-    helper(profile.next_milestone || 'Add your first sample to get started.'),
-    el('div', { class: 'metric-grid' }, el('div', {}, el('div', { class: 'metric-value' }, confirmed), el('div', { class: 'metric-name' }, 'Confirmed samples')), el('div', {}, el('div', { class: 'metric-value' }, feedbackCount), el('div', { class: 'metric-name' }, 'Considered choices'))),
-    el('p', { class: 'helper', style: 'margin-top: 17px' }, 'XP counts your contributions. It is not a score of how accurately we know your voice.'));
+    helper(profile.next_milestone || 'Make a choice or teach a language preference to begin.'),
+    el('div', { class: 'metric-grid' }, el('div', {}, el('div', { class: 'metric-value' }, state.feedback.length), el('div', { class: 'metric-name' }, 'Considered choices')), el('div', {}, el('div', { class: 'metric-value' }, lessons), el('div', { class: 'metric-name' }, 'Active language lessons'))),
+    el('p', { class: 'helper', style: 'margin-top: 17px' }, `${plural(confirmed, 'confirmed sample')} · optional evidence. XP counts contributions, not writing accuracy.`));
 }
 function stepsPanel() {
-  const confirmed = state.samples.some(sample => sample.status === 'confirmed');
-  const feedback = state.feedback.length > 0;
   const rows = [
-    [confirmed, 'Start with your own words', 'Confirm a sample you actually wrote.'],
-    [feedback, 'Make a few considered choices', 'Choose wording, explain why, shape the format.'],
-    [false, 'Put your voice to work', 'Draft with context. Keep what feels like you.'],
+    [state.feedback.length > 0, 'Choose what sounds like you', 'Compare expressions, words, sentence shape, or rhythm.'],
+    [activeLanguageLessons().length > 0, 'Teach the difference directly', 'Say what to prefer, what to avoid, and when it applies.'],
+    [false, 'Try it in a real draft', 'Keep the useful changes. Correct what still feels off.'],
   ];
-  return el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'A little at a time'), el('ol', { class: 'steps' }, rows.map(([done, title, text], index) => el('li', { class: `step ${done ? 'done' : ''}` }, el('span', { class: 'step-index' }, done ? icon('check', 12) : index + 1), el('div', {}, el('strong', {}, title), el('p', {}, text))))));
+  return el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Start without samples'), el('ol', { class: 'steps' }, rows.map(([done, title, text], index) => el('li', { class: `step ${done ? 'done' : ''}` }, el('span', { class: 'step-index' }, done ? icon('check', 12) : index + 1), el('div', {}, el('strong', {}, title), el('p', {}, text))))));
 }
 function sampleForm({ compact = false } = {}) {
   const title = input({ placeholder: 'e.g. A project update I sent last week', maxlength: 200 });
@@ -230,22 +238,74 @@ function renderPractice() {
   const feedbackIds = new Set(state.feedback.map(item => String(item.round_id)));
   const unanswered = state.rounds.filter(round => !feedbackIds.has(String(round.id)) && round.status !== 'completed');
   const currentRound = unanswered.at(-1);
-  const column = el('div', { class: 'primary-column' });
-  if (!confirmed.length && !pending.length && !currentRound) column.append(sampleForm());
-  if (pending.length) column.append(el('section', { class: 'panel' }, panelHeading('A quick authorship check', 'Only writing you confirm becomes positive style evidence.', badge(`${pending.length} to review`, 'amber')), sampleCard(pending[0], { nested: true }), pending.length > 1 && el('div', { class: 'panel-foot' }, helper(`${pending.length - 1} more waiting in your inbox.`), button('Review all samples', () => navigate('samples'), 'small', 'arrow'))));
-  if (currentRound) column.append(roundPanel(currentRound));
-  else if (confirmed.length) column.append(roundSetup());
-  else column.append(callout('Try a practice round first', 'Explore wording and presentation with a generic rehearsal. Your choices are preference feedback, never a sample of your authorship.', '', button('Try a round', () => { const section = roundSetup(); column.append(section); section.scrollIntoView({ behavior: 'smooth', block: 'start' }); section.querySelector('input')?.focus({ preventScroll: true }); }, 'small', 'arrow')));
-  if (confirmed.length && !currentRound) column.append(el('div', { class: 'aside-note' }, el('h3', {}, 'Your professional voice and your personal voice can differ.'), el('p', {}, 'Choose a context before each round. A concise work update, a warm message to a friend, and a public post don’t need the same wording or shape.')));
-  const aside = el('aside', { class: 'aside-column' }, journeyPanel(), stepsPanel(), el('div', { class: 'aside-note' }, el('h3', {}, 'Wording is only half of it.'), el('p', {}, 'Paragraph length, bullet points, opening lines, sign-offs, and emoji are part of your voice, too. Every round makes room for those preferences.')));
-  return [pageHeading('Calibration / one choice at a time', 'Sound more like yourself.', 'Bring your writing. Notice what fits. Build a voice profile that respects the context.'), el('div', { class: 'layout' }, column, aside)];
+  const column = el('div', { class: 'primary-column' }, currentRound ? roundPanel(currentRound) : roundSetup(), languageLessonPanel({includeForm: true}));
+  if (pending.length) column.append(callout(`${plural(pending.length, 'sample')} waiting for review`, 'You can keep practicing now. Confirm authorship later if you want these samples to add evidence.', '', button('Review samples', () => navigate('samples'), 'small', 'arrow')));
+  const hasTeaching = state.feedback.length > 0 || activeLanguageLessons().length > 0;
+  const startNote = !confirmed.length && state.settings.provider === 'codex'
+    ? (hasTeaching ? 'Your explicit lessons and choices can guide Codex even without samples. Calibration is still developing; judge each result.' : 'Uncalibrated, and ready to learn. Codex can start with a comparison now; your choices, corrections, and direct lessons will provide direction.')
+    : (state.settings.provider === 'codex' ? 'Your lessons, choices, and optional confirmed writing provide context for Codex.' : 'Offline mode lets you record lessons and rehearse comparisons with deterministic examples. A language model is not running.');
+  const aside = el('aside', { class: 'aside-column' }, journeyPanel(), stepsPanel(), el('div', { class: 'aside-note' }, el('h3', {}, 'Samples are optional.'), el('p', {}, startNote), button('Add writing samples later', () => navigate('samples'), 'quiet small', 'plus')), el('div', { class: 'aside-note' }, el('h3', {}, 'Teach the language and the presentation.'), el('p', {}, 'Your everyday expressions, vocabulary, sentence structure, and rhythm can change with the audience. Paragraphs, bullets, openings, and sign-offs have their own preferences, too.')));
+  return [pageHeading('Calibration / words, sentences, and context', 'Teach it how you actually write.', 'Start with a comparison or a direct lesson. No writing samples required; every choice gives it clearer direction.'), el('div', { class: 'layout' }, column, aside)];
 }
 function roundSetup() {
   const context = contextEditor(ui.context, { scenario: true });
-  const submit = button(state.settings.provider === 'codex' ? 'Create a practice round' : 'Create a rehearsal round', null, 'primary', 'arrow'); submit.type = 'submit';
-  const form = el('form', { class: 'panel' }, panelHeading('Set the scene', 'A useful choice starts with a real situation.', badge('Wording + presentation')), el('div', { class: 'panel-body' }, context.node), el('div', { class: 'panel-foot' }, helper(state.settings.provider === 'codex' ? 'Uses confirmed, non-held-out samples and your feedback.' : 'Offline examples are deterministic, not model-generated.'), submit));
-  form.addEventListener('submit', event => { event.preventDefault(); busy(submit, async () => { await api('/rounds', 'POST', { context: context.get() }); await refresh(); }, 'Creating round…'); });
+  const focusButtons = [];
+  const focusHelp = el('div', {class: 'focus-help', 'aria-live': 'polite'});
+  const updateHelp = () => { const item = practiceFocuses[ui.practiceFocus]; focusHelp.replaceChildren(el('strong', {}, item.plain), el('p', {}, item.description), el('p', {class: 'focus-example'}, item.example)); };
+  const picker = el('div', {class: 'focus-picker', role: 'group', 'aria-label': 'Practice focus'}, Object.entries(practiceFocuses).map(([key, item]) => {
+    const control = el('button', {type: 'button', class: `focus-choice ${ui.practiceFocus === key ? 'active' : ''}`, 'aria-pressed': String(ui.practiceFocus === key), onClick: () => { ui.practiceFocus = key; focusButtons.forEach(([value, target]) => { target.classList.toggle('active', value === key); target.setAttribute('aria-pressed', String(value === key)); }); updateHelp(); }}, item.label);
+    focusButtons.push([key, control]); return control;
+  }));
+  updateHelp();
+  const submit = button(state.settings.provider === 'codex' ? 'Compare two versions' : 'Rehearse a comparison', null, 'primary', 'arrow'); submit.type = 'submit';
+  const form = el('form', { class: 'panel' }, panelHeading('What should we tune?', 'Pick a focus, then give it a situation.', badge('Samples optional')), el('div', { class: 'panel-body' }, el('div', {class: 'field'}, el('span', {class: 'field-label'}, 'Practice focus'), picker, focusHelp), context.node), el('div', { class: 'panel-foot' }, helper(state.settings.provider === 'codex' ? (activeLanguageLessons().length || state.feedback.length ? 'Uses your contextual lessons and choices. Samples are optional.' : 'Start uncalibrated. Teach it through choices and corrections.') : 'Offline comparisons rehearse the workflow with simple rules.'), submit));
+  form.addEventListener('submit', event => { event.preventDefault(); busy(submit, async () => { await api('/rounds', 'POST', { context: context.get(), focus: ui.practiceFocus }); await refresh(); }, 'Creating comparison…'); });
   return form;
+}
+function languageLessonForm(lesson = null) {
+  const draft = lesson || ui.lessonDraft;
+  const context = contextEditor(lesson?.context || ui.context, {remember: false});
+  const dimension = select(Object.entries(languageDimensions).map(([key, item]) => [key, `${item.label} — ${item.plain}`]), draft.dimension || 'vernacular');
+  const guidance = el('textarea', {rows: 3, maxlength: 2000, value: draft.guidance || '', onInput: event => { if (!lesson) ui.lessonDraft.guidance = event.target.value; }});
+  const preferred = el('textarea', {rows: 2, maxlength: 500, class: 'phrase-input', value: draft.preferred || '', onInput: event => { if (!lesson) ui.lessonDraft.preferred = event.target.value; }});
+  const avoided = el('textarea', {rows: 2, maxlength: 500, class: 'phrase-input', value: draft.avoided || '', onInput: event => { if (!lesson) ui.lessonDraft.avoided = event.target.value; }});
+  const explanation = helper('');
+  const updatePrompts = () => { const item = languageDimensions[dimension.value]; explanation.textContent = item.description; guidance.placeholder = item.guidance; preferred.placeholder = item.preferred; avoided.placeholder = item.avoided; if (!lesson) ui.lessonDraft.dimension = dimension.value; };
+  dimension.addEventListener('change', updatePrompts); updatePrompts();
+  const submit = button(lesson ? 'Save lesson changes' : 'Save this language lesson', null, lesson ? 'small primary' : 'primary', 'check'); submit.type = 'submit';
+  const form = el('form', {class: 'language-lesson-form'}, field('What are you teaching?', dimension), explanation, el('div', {style: 'margin-top: 18px'}, field('How should it sound?', guidance, 'or use a phrase below'), el('div', {class: 'form-row'}, field('Say it this way', preferred, 'optional'), field('Avoid this', avoided, 'optional'))), details('Where does this lesson apply?', context.node, true), el('div', {class: 'button-group', style: 'margin-top: 18px'}, submit));
+  form.addEventListener('submit', event => { event.preventDefault(); busy(submit, async () => {
+    const content = {dimension: dimension.value, guidance: guidance.value.trim(), preferred: preferred.value.trim(), avoided: avoided.value.trim(), context: context.get()};
+    if (!content.guidance && !content.preferred && !content.avoided) throw new Error('Add guidance, a preferred phrase, or something to avoid.');
+    await api(lesson ? `/language-lessons/${encodeURIComponent(lesson.id)}` : '/language-lessons', lesson ? 'PATCH' : 'POST', content);
+    if (!lesson) ui.lessonDraft = {dimension: dimension.value, guidance: '', preferred: '', avoided: ''};
+    await refresh(); toast(lesson ? 'Language lesson updated.' : 'Lesson saved. No writing sample was needed.');
+  }); });
+  return form;
+}
+function languageLessonRow(lesson) {
+  const enabled = Boolean(lesson.enabled);
+  const dimension = languageDimensions[lesson.dimension] || {label: lesson.dimension, plain: 'Language preference'};
+  const row = el('article', {class: `language-lesson ${enabled ? '' : 'is-disabled'}`}, el('div', {class: 'review-top'}, el('div', {}, el('h3', {}, dimension.label, el('span', {class: 'lesson-dimension'}, ` / ${dimension.plain}`)), contextPills(lesson.context)), badge(enabled ? 'Active lesson' : 'Not in use', enabled ? '' : 'muted')),
+    lesson.guidance && el('p', {class: 'lesson-guidance'}, lesson.guidance),
+    (lesson.preferred || lesson.avoided) && el('dl', {class: 'lesson-phrases'}, lesson.preferred && el('div', {}, el('dt', {}, 'Prefer'), el('dd', {}, lesson.preferred)), lesson.avoided && el('div', {}, el('dt', {}, 'Avoid'), el('dd', {}, lesson.avoided))));
+  const toggle = button(enabled ? 'Stop using this lesson' : 'Use this lesson again', () => busy(toggle, async () => { await api(`/language-lessons/${encodeURIComponent(lesson.id)}`, 'PATCH', {enabled: !enabled}); await refresh(); toast(enabled ? 'Lesson disabled. It will not guide future generation.' : 'Lesson enabled for its context.'); }), 'small');
+  const remove = button('Delete', () => {
+    const confirmation = el('div', {class: 'lesson-delete'}, helper('Delete this lesson permanently? Disabling keeps it available for later.'));
+    const confirm = button('Delete lesson', () => busy(confirm, async () => { await api(`/language-lessons/${encodeURIComponent(lesson.id)}`, 'DELETE', {}); await refresh(); toast('Language lesson deleted.'); }), 'small danger');
+    confirmation.append(el('div', {class: 'button-group'}, confirm, button('Keep it', () => { confirmation.remove(); remove.disabled = false; }, 'small'))); row.append(confirmation); remove.disabled = true;
+  }, 'small quiet');
+  row.append(el('div', {class: 'button-group', style: 'margin-top: 13px'}, toggle, remove), details('Edit language and context', languageLessonForm(lesson)));
+  return row;
+}
+function languageLessonPanel({includeForm = false} = {}) {
+  const lessons = state.language_lessons || [];
+  const panel = el('section', {class: 'panel', id: 'language-lessons'}, panelHeading(includeForm ? 'Teach your language directly' : 'Your language lessons', 'State a preference or give a phrase to use and one to avoid. Each lesson belongs to a context.', badge(`${activeLanguageLessons().length} active`, 'muted')));
+  const body = el('div', {class: 'panel-body'});
+  if (includeForm) body.append(languageLessonForm(), el('p', {class: 'helper', style: 'margin-top: 14px'}, 'This records your explicit preference. It does not claim you authored an example or change model weights.'));
+  if (lessons.length) body.append(el('div', {class: 'language-lesson-list'}, includeForm && el('div', {class: 'section-title'}, 'Saved language lessons'), lessons.map(languageLessonRow)));
+  else if (!includeForm) body.append(helper('No direct language lessons yet. You can teach your expressions, sentence structure, word choice, and rhythm without importing any writing.'), button('Teach a language preference', () => { navigate('practice'); document.querySelector('#language-lessons')?.scrollIntoView({behavior: 'smooth', block: 'start'}); }, 'small', 'plus'));
+  panel.append(body); return panel;
 }
 const presentationOptions = {
   paragraph_length: ['Paragraph length', [['', 'No preference'], ['short', 'Short paragraphs'], ['medium', 'Medium paragraphs'], ['long', 'Longer paragraphs']]],
@@ -256,6 +316,7 @@ const presentationOptions = {
   detail: ['Detail', [['', 'No preference'], ['essentials only', 'Essentials only'], ['some context', 'Some context'], ['thorough', 'Explain thoroughly']]],
 };
 function roundPanel(round) {
+  const focus = practiceFocuses[round.focus] || practiceFocuses.mixed;
   const initial = ui.selections.get(String(round.id)) || { choice: '', edited_text: '', notes: '', presentation: {} };
   ui.selections.set(String(round.id), initial);
   const buttons = [];
@@ -266,14 +327,14 @@ function roundPanel(round) {
     buttons.push([option.id, control]); return control;
   }));
   const neither = button('Neither feels right', () => setChoice('neither'), initial.choice === 'neither' ? 'selected' : ''); neither.setAttribute('aria-pressed', initial.choice === 'neither' ? 'true' : 'false'); buttons.push(['neither', neither]);
-  const rewrite = el('textarea', { rows: 3, placeholder: 'Write it your way, or make a small edit to the version you preferred.', value: initial.edited_text, maxlength: 10000, onInput: event => { initial.edited_text = event.target.value; } });
-  const notes = el('textarea', { rows: 2, style: 'min-height: 70px', placeholder: 'e.g. “A is closer, but skip the opener and keep it to two short paragraphs.”', value: initial.notes, maxlength: 4000, onInput: event => { initial.notes = event.target.value; } });
+  const rewrite = el('textarea', { rows: 3, placeholder: `Rewrite a phrase or sentence your way. ${focus.example}`, value: initial.edited_text, maxlength: 10000, onInput: event => { initial.edited_text = event.target.value; } });
+  const notes = el('textarea', { rows: 2, style: 'min-height: 70px', placeholder: focus.note, value: initial.notes, maxlength: 4000, onInput: event => { initial.notes = event.target.value; } });
   const presentation = el('div', { class: 'presentation-fields' }, Object.entries(presentationOptions).map(([key, [label, choices]]) => field(label, select(choices, initial.presentation[key] || '', { onChange: event => { initial.presentation[key] = event.target.value; } }))));
-  const form = el('form', { class: 'panel' }, panelHeading('Which sounds more like you?', 'Choose the closer fit. There are no right answers.', badge(round.provider === 'codex' ? 'Codex round' : 'Heuristic rehearsal', round.provider === 'codex' ? '' : 'amber')),
+  const form = el('form', { class: 'panel' }, panelHeading('Which sounds more like you?', `${focus.label}: ${focus.coaching}`, badge(round.provider === 'codex' ? 'Codex round' : 'Heuristic rehearsal', round.provider === 'codex' ? '' : 'amber')),
     el('div', { class: 'round-context' }, contextPills(round.context), round.context?.scenario && el('p', { class: 'round-scenario' }, round.context.scenario)),
     el('div', { class: 'panel-body' }, options, el('div', { class: 'neither-row' }, neither, helper('A rejection is useful feedback, too.')),
-      el('div', { class: 'feedback-fields' }, field('What made the difference?', notes, 'optional'), details('Make it sound exactly right', field('Your version', rewrite, 'feedback only'), Boolean(initial.edited_text)), details('How should it look in this context?', presentation, true))),
-    el('div', { class: 'panel-foot' }, helper('Choices and rewrites are feedback, not authored samples.'), submit));
+      el('div', { class: 'feedback-fields' }, field('Teach the language difference', notes, 'optional'), field('Your words, your sentence', rewrite, 'optional correction'), details('Presentation: paragraphs, structure & more', presentation, false))),
+    el('div', { class: 'panel-foot' }, helper('Your choices and corrections teach preferences in this context.'), submit));
   if (round.warnings?.length) form.insertBefore(el('div', { class: 'panel-body', style: 'padding-bottom: 0' }, helper(round.warnings.join(' '))), form.children[2]);
   form.addEventListener('submit', event => { event.preventDefault(); busy(submit, async () => {
     if (!initial.choice) throw new Error('Choose A, B, or neither before saving.');
@@ -423,9 +484,9 @@ function renderWrite() {
   if (ui.draft) {
     const evidenceSamples = (ui.draft.evidence_ids || []).map(id => state.samples.find(sample => String(sample.id) === String(id))).filter(Boolean);
     output.append(el('div', { class: 'draft-text' }, ui.draft.text), el('div', { class: 'panel-foot' }, helper('Generated drafts are not added as authored evidence.'), button('Copy draft', async () => { try { await navigator.clipboard.writeText(ui.draft.text); toast('Draft copied.'); } catch { toast('Clipboard access was denied. Select and copy the draft text directly.', true); } }, 'small', 'copy')),
-      el('div', { class: 'evidence' }, el('div', { class: 'section-title' }, 'Evidence used'), evidenceSamples.length ? el('ul', { class: 'evidence-list' }, evidenceSamples.map(sample => el('li', {}, `${sample.title || 'Untitled sample'} · ${sample.context?.channel || 'work'}`))) : helper('No confirmed source samples were used.'), ui.draft.warnings?.length && el('div', { style: 'margin-top: 12px' }, ui.draft.warnings.map(warning => helper(warning)))));
-  } else output.append(el('div', { class: 'draft-empty' }, icon('feather'), el('h3', {}, 'Make the first draft yours.'), el('p', {}, 'Start with the facts on the left. Your confirmed writing and context-specific preferences will guide the result.')),
-    el('div', { class: 'evidence' }, el('div', { class: 'section-title' }, 'A clear foundation'), helper(`${plural(state.samples.filter(sample => sample.status === 'confirmed' && !sample.held_out).length, 'eligible sample')} · ${plural(state.feedback.length, 'saved preference', 'saved preferences')}`)));
+      el('div', { class: 'evidence' }, el('div', { class: 'section-title' }, 'Source examples supplied'), evidenceSamples.length ? el('ul', { class: 'evidence-list' }, evidenceSamples.map(sample => el('li', {}, `${sample.title || 'Untitled sample'} · ${sample.context?.channel || 'work'}`))) : helper('No confirmed source samples were used.'), ui.draft.warnings?.length > 0 && el('div', { style: 'margin-top: 12px' }, ui.draft.warnings.map(warning => helper(warning)))));
+  } else output.append(el('div', { class: 'draft-empty' }, icon('feather'), el('h3', {}, 'Make the first draft yours.'), el('p', {}, 'Start with the facts on the left. Your language lessons and choices provide direction. Confirmed writing samples are optional additional evidence.')),
+    el('div', { class: 'evidence' }, el('div', { class: 'section-title' }, 'A clear foundation'), helper(`${plural(state.samples.filter(sample => sample.status === 'confirmed' && !sample.held_out).length, 'eligible sample')} · ${plural(state.feedback.length, 'saved choice')} · ${plural(activeLanguageLessons().length, 'active language lesson')}`)));
   return [pageHeading('Writing / voice meets purpose', 'Same you. Different moments.', 'Choose how much help you want, from a light polish to a more considered rewrite.'), state.settings.provider !== 'codex' && el('div', { style: 'margin-bottom: 21px' }, callout('You’re in offline rehearsal', 'This mode uses deterministic text rules. It does not run a language model or demonstrate learned writing quality. Connect the Codex provider to generate adaptive drafts.', 'warning')), el('div', { class: 'write-layout' }, form, output)];
 }
 function renderProfile() {
@@ -435,14 +496,18 @@ function renderProfile() {
   const contexts = profile.contexts || [];
   const preferences = profile.preferences || [];
   const patterns = profile.patterns || [];
-  const stats = el('div', { class: 'panel stats-strip' }, [[eligible.length, 'Samples informing your voice'], [state.feedback.length, 'Saved choices'], [contexts.length, 'Contexts with evidence'], [confirmed.length - eligible.length, 'Samples held out']].map(([value, label]) => el('div', { class: 'stat-cell' }, el('strong', {}, value), el('span', {}, label))));
-  const patternBody = patterns.length ? el('div', { class: 'patterns' }, patterns.map(pattern => el('div', { class: 'pattern' }, el('div', {}, el('strong', {}, pattern.name), el('p', {}, asText(pattern.value))), badge(`${pattern.evidence_count || 0} sources`, 'muted')))) : empty('Your profile starts with evidence.', 'Confirm a few things you wrote to see observed writing patterns here.', button('Add your writing', () => navigate('samples'), 'small', 'plus'), 'profile');
-  const patternPanel = el('section', { class: 'panel' }, panelHeading('Observed writing patterns', profile.patterns_scope || 'Descriptive signals from confirmed, non-held-out writing.'), el('div', { class: 'panel-body' }, patternBody));
-  const preferenceBody = preferences.length ? preferences.slice().reverse().map(preference => el('article', { class: 'preference' }, contextPills(typeof preference.context === 'object' ? preference.context : { channel: preference.context || 'work' }), preference.notes && el('p', {}, preference.notes), Object.keys(preference.presentation || {}).length > 0 && el('dl', {}, Object.entries(preference.presentation).map(([key, value]) => el('div', {}, el('dt', {}, (presentationOptions[key]?.[0] || key) + ':'), el('dd', {}, asText(value))))), preference.edited_text && details('Your feedback rewrite', el('p', { style: 'white-space: pre-wrap' }, preference.edited_text)), !preference.notes && !Object.keys(preference.presentation || {}).length && !preference.edited_text && el('p', {}, preference.choice === 'neither' ? 'Rejected both alternatives for this context.' : `Preferred option ${asText(preference.choice).toUpperCase()} for this context.`))) : empty('Tell it what feels right.', 'A preferred phrase, an unwanted sign-off, or a choice of bullets over prose all give your profile useful direction.', button('Start a practice round', () => navigate('practice'), 'small', 'arrow'), 'practice');
+  const lessonContexts = profile.language_contexts || [];
+  const coverageMap = new Map();
+  for (const item of contexts) coverageMap.set(item.channel, {samples: item.count, lessons: 0});
+  for (const item of lessonContexts) { const row = coverageMap.get(item.channel) || {samples: 0, lessons: 0}; row.lessons = item.count; coverageMap.set(item.channel, row); }
+  const stats = el('div', { class: 'panel stats-strip' }, [[activeLanguageLessons().length, 'Active language lessons'], [state.feedback.length, 'Saved choices'], [eligible.length, 'Optional authored samples'], [coverageMap.size, 'Contexts with lessons or samples']].map(([value, label]) => el('div', { class: 'stat-cell' }, el('strong', {}, value), el('span', {}, label))));
+  const patternBody = patterns.length ? el('div', { class: 'patterns' }, patterns.map(pattern => el('div', { class: 'pattern' }, el('div', {}, el('strong', {}, pattern.name), el('p', {}, asText(pattern.value))), badge(`${pattern.evidence_count || 0} sources`, 'muted')))) : empty('Authored samples are optional.', 'Your direct lessons and choices can guide writing now. Add confirmed samples if you want observed writing patterns here, too.', button('Add your writing', () => navigate('samples'), 'small', 'plus'), 'profile');
+  const patternPanel = el('section', { class: 'panel' }, panelHeading('Observed writing patterns', `${profile.patterns_scope || 'Descriptive signals from confirmed writing.'} ${confirmed.length - eligible.length} held-out samples excluded.`), el('div', { class: 'panel-body' }, patternBody));
+  const preferenceBody = preferences.length ? preferences.slice().reverse().map(preference => el('article', { class: 'preference' }, contextPills(typeof preference.context === 'object' ? preference.context : { channel: preference.context || 'work' }), preference.focus && el('div', {style: 'margin-top: 8px'}, badge(`${practiceFocuses[preference.focus]?.label || preference.focus} practice`, 'muted')), preference.notes && el('p', {}, preference.notes), Object.keys(preference.presentation || {}).length > 0 && el('dl', {}, Object.entries(preference.presentation).map(([key, value]) => el('div', {}, el('dt', {}, (presentationOptions[key]?.[0] || key) + ':'), el('dd', {}, asText(value))))), preference.edited_text && details('Your feedback rewrite', el('p', { style: 'white-space: pre-wrap' }, preference.edited_text)), !preference.notes && !Object.keys(preference.presentation || {}).length && !preference.edited_text && el('p', {}, preference.choice === 'neither' ? 'Rejected both alternatives for this context.' : `Preferred option ${asText(preference.choice).toUpperCase()} for this context.`))) : empty('Tell it what feels right.', 'A preferred phrase, an unwanted sign-off, or a choice of bullets over prose all give your profile useful direction.', button('Start a practice round', () => navigate('practice'), 'small', 'arrow'), 'practice');
   const preferencePanel = el('section', { class: 'panel' }, panelHeading('Preferences, in context', 'Your choices and reasons, kept separate from authored evidence.'), el('div', { class: 'panel-body' }, preferenceBody));
-  const coverage = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Context coverage'), contexts.length ? contexts.map(context => el('div', { class: 'coverage-row' }, el('strong', {}, context.channel || 'work'), el('span', {}, plural(context.count || 0, 'sample')))) : helper('No confirmed context coverage yet. Work, personal, community, and any labels you create stay distinct.'));
+  const coverage = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Context coverage'), coverageMap.size ? [...coverageMap].map(([channel, counts]) => el('div', { class: 'coverage-row' }, el('strong', {}, channel || 'work'), el('span', {}, `${plural(counts.lessons, 'lesson')} · ${plural(counts.samples, 'sample')}`))) : helper('Teach a language preference in any context to start. Work, personal, community, and labels you create stay distinct.'));
   const provider = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Generation provider'), providerPill(), el('p', { class: 'export-note' }, state.settings.provider === 'codex' ? `Using your local Codex CLI${state.settings.model ? ` with ${state.settings.model}` : ''}. Selected evidence and your brief are sent to the configured model when you generate.` : 'Offline mode rehearses the workflow with deterministic rules. No language model is running. The README explains how to start with the Codex provider.'), helper(state.capabilities?.codex_available ? 'Codex CLI detected. Authentication is verified only when generation succeeds.' : 'Codex CLI availability has not been confirmed by the server.'));
-  return [pageHeading('Voice profile / evidence, not a score', 'A voice that keeps its context.', 'See what you’ve contributed, what you’ve explicitly preferred, and where there is more to learn.'), stats, el('div', { class: 'layout' }, el('div', { class: 'primary-column' }, patternPanel, preferencePanel, priorPanel()), el('aside', { class: 'aside-column' }, exportPanel(), coverage, provider, el('div', { class: 'aside-note' }, el('h3', {}, 'A profile, not a personality verdict.'), el('p', {}, 'This is a portable collection of evidence and preferences. Coverage grows with your contributions; a completion or XP count never establishes writing accuracy.'))))];
+  return [pageHeading('Voice profile / evidence, not a score', 'A voice that keeps its context.', 'See what you’ve contributed, what you’ve explicitly preferred, and where there is more to learn.'), stats, el('div', { class: 'layout' }, el('div', { class: 'primary-column' }, languageLessonPanel(), preferencePanel, patternPanel, priorPanel()), el('aside', { class: 'aside-column' }, exportPanel(), coverage, provider, el('div', { class: 'aside-note' }, el('h3', {}, 'A profile, not a personality verdict.'), el('p', {}, 'This is a portable collection of evidence and preferences. Coverage grows with your contributions; a completion or XP count never establishes writing accuracy.'))))];
 }
 function exportPanel() {
   const include = input({ type: 'checkbox', checked: ui.includeExamples, onChange: event => { ui.includeExamples = event.target.checked; ui.exportText = ''; preview.replaceChildren(); } });

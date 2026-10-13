@@ -84,6 +84,8 @@ class Store:
                     presentation TEXT NOT NULL, created_at TEXT NOT NULL
                 );
             """)
+            if "focus" not in {row["name"] for row in conn.execute("PRAGMA table_info(rounds)")}:
+                conn.execute("ALTER TABLE rounds ADD COLUMN focus TEXT NOT NULL DEFAULT 'mixed'")
         self.path.chmod(0o600)
 
     @contextmanager
@@ -185,7 +187,9 @@ class Store:
         with self._connect() as conn:
             return [self._round(row) for row in conn.execute("SELECT * FROM rounds ORDER BY created_at DESC, id DESC")]
 
-    def add_round(self, context, generated, evidence_ids):
+    def add_round(self, context, generated, evidence_ids, focus="mixed"):
+        from .language import validate_focus
+        focus = validate_focus(focus)
         context = validate_context(context)
         options = generated.get("options")
         if not isinstance(options, list) or len(options) != 2:
@@ -200,17 +204,17 @@ class Store:
         if not isinstance(warnings, list) or len(warnings) > 20 or not all(isinstance(w, str) and len(w) <= 2000 for w in warnings):
             raise ValueError("Invalid provider warnings")
         item = {"id": uuid.uuid4().hex, "context": context, "options": clean_options, "provider": provider,
-                "warnings": warnings, "evidence_ids": list(evidence_ids), "status": "open", "created_at": _now()}
+                "warnings": warnings, "evidence_ids": list(evidence_ids), "status": "open", "created_at": _now(), "focus": focus}
         with self._connect() as conn:
-            conn.execute("INSERT INTO rounds VALUES (?,?,?,?,?,?,?,?)", (
+            conn.execute("INSERT INTO rounds (id,context,options,provider,warnings,evidence_ids,status,created_at,focus) VALUES (?,?,?,?,?,?,?,?,?)", (
                 item["id"], json.dumps(context), json.dumps(clean_options), provider, json.dumps(warnings),
-                json.dumps(evidence_ids), item["status"], item["created_at"]))
+                json.dumps(evidence_ids), item["status"], item["created_at"], focus))
         return item
 
     def feedback(self):
         with self._connect() as conn:
             result = []
-            rows = conn.execute("""SELECT f.*,r.context,r.options,r.provider FROM feedback f
+            rows = conn.execute("""SELECT f.*,r.context,r.options,r.provider,r.focus FROM feedback f
                 JOIN rounds r ON r.id=f.round_id ORDER BY f.created_at DESC,f.id DESC""")
             for row in rows:
                 item = dict(row)

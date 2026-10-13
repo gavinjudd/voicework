@@ -2,7 +2,9 @@
 
 A local writing practice studio that learns how you write **for a particular audience, situation, and purpose**—including how you present it.
 
-Review candidate writing, confirm what is actually yours, compare two drafts, make small corrections, and keep a portable writing reference. Adjust polish, detail, warmth, assertiveness, and structure when drafting. Personal texting and professional writing retain separate contextual evidence.
+Start without samples: teach a language rule, name phrases you prefer or avoid, and compare drafts for a concrete situation. Optionally add reviewed writing to ground the profile in authentic examples. Keep a portable reference for vernacular, sentence structure, word choice, rhythm, and presentation. Personal texting and professional writing retain separate contextual evidence.
+
+Source is published in the private [gavinjudd/voicework repository](https://github.com/gavinjudd/voicework).
 
 ## Run
 
@@ -30,17 +32,17 @@ For a completely offline walkthrough of the workflow:
 python3 -m voicework --provider offline
 ```
 
-Offline mode is explicitly labeled **rehearsal**. It persists review and calibration feedback, but uses simple text transformations instead of an AI. It does not demonstrate personalized writing quality. There is no silent fallback from Codex to offline.
+Offline mode is explicitly labeled **rehearsal**. It persists lessons, review and calibration feedback, but uses simple text transformations and fixed comparison contrasts instead of an AI. It does not semantically apply language lessons or demonstrate personalized writing quality. There is no silent fallback from Codex to offline.
 
 ## First useful session
 
-1. **Samples:** paste a short piece you wrote, import browser captures, or discover files in a folder you choose. Nothing scans automatically.
-2. **Review:** preview inferred channel, audience, intent, relationship, stakes and situation, with reasons and uncertainty. Apply or edit the suggestions, then separately mark the passage as yours, AI-assisted, or not yours. Context suggestions never confirm authorship.
-3. **Practice:** compare two messages for a concrete situation. Choose A, B, or neither; rewrite a line and teach presentation preferences such as prose/bullets, paragraph length, openings, sign-offs, emoji, and detail.
+1. **Teach directly:** add a context-specific language lesson with a rule and preferred or avoided phrasing. Teach vernacular, syntax, diction or rhythm without uploading writing. Edit, disable or delete lessons as preferences change.
+2. **Practice:** compare two messages for a concrete situation, with a mixed comparison or a focus on vernacular, syntax, diction or rhythm. Choose A, B, or neither; rewrite a line and explain why. Presentation feedback also covers prose/bullets, paragraph length, openings, sign-offs, emoji and detail. Samples are optional.
+3. **Add evidence when useful:** paste writing, import browser captures, or discover files in a chosen folder. Review suggested context and separately mark the passage as yours, AI-assisted, or not yours. Context suggestions and language lessons never confirm authorship. Nothing scans automatically.
 4. **Write:** describe what you want to say and move the controls. Greater intensity changes style, never grants permission to invent facts or accomplishments.
 5. **Prior knowledge:** add compact background or guidance with a source and context, then explicitly confirm it for use. It remains separate from authored samples.
 6. **Evaluate:** compare a baseline and calibrated draft for the same brief, with randomized labels hidden until your vote. Choose either, tie, or neither; flag factual issues. Evaluation votes do not train the profile.
-7. **Voice profile:** export a Markdown reference containing patterns, contextual feedback and confirmed prior packets. Raw authored examples are excluded unless you explicitly include them. Bring the reference into Codex, Cursor, or another writing workflow.
+7. **Voice profile:** export a Markdown reference containing patterns, contextual feedback, active language lessons and confirmed prior packets. Raw authored examples are excluded unless you explicitly include them. Bring the reference into Codex, Cursor, or another writing workflow.
 
 Contribution points measure participation. They are not an accuracy score. Keep some genuine writing marked as held out; it is excluded from learning evidence and prompt/export examples. A held-out partition alone is not a completed quality evaluation.
 
@@ -58,9 +60,9 @@ All discovered/imported passages start unconfirmed. A document being on your com
 
 ## What “learning” means here
 
-The current system uses context-matched examples, descriptive writing patterns, persistent positive/negative feedback, and confirmed prior packets in generation prompts. It is **in-context calibration**, not model-weight fine-tuning. Presentation preferences are conditional. Your current chat's hidden state and past Codex conversations are not automatically available; supply compact prior knowledge explicitly, with its source, for review.
+The current system uses context-matched examples, descriptive writing patterns, persistent positive/negative feedback, active language lessons and confirmed prior packets in generation prompts. It is **in-context calibration**, not model-weight fine-tuning. Language lessons are explicit preferences, kept separately from authored samples, prior knowledge and evaluation votes; they can teach a desired style without claiming you already write that way. Samples are optional, and presentation preferences are conditional. Your current chat's hidden state and past Codex conversations are not automatically available; supply compact prior knowledge explicitly, with its source, for review.
 
-Context analysis uses offline heuristics or the selected Codex provider and returns a reviewable preview. Prior packets store background or guidance, never authentic writing. Blinded evaluation is a separate lane: both drafts receive the same brief and neutral controls, while only the calibrated draft receives approved examples, preferences and confirmed priors. Ratings are immutable and excluded from learning. Counts include baseline wins, calibrated wins, ties, neither and factual flags by channel; offline comparisons are counted separately as rehearsal. Preference counts do not establish achieved writing accuracy or factual correctness.
+Context analysis uses offline heuristics or the selected Codex provider and returns a reviewable preview. Prior packets store background or guidance, never authentic writing. Blinded evaluation is a separate lane: both drafts receive the same brief and neutral controls, while only the calibrated draft receives approved examples, preferences, active contextual lessons and confirmed priors. Ratings are immutable and excluded from learning. Counts include baseline wins, calibrated wins, ties, neither and factual flags by channel; offline comparisons are counted separately as rehearsal. Preference counts do not establish achieved writing accuracy or factual correctness.
 
 A generated draft lists the examples supplied to the model. These IDs explain retrieval, not a claim that a particular sentence came from a particular source. Strong controls are guidance to the model, not a verified factuality guarantee; review important drafts before using them.
 
@@ -69,11 +71,11 @@ A generated draft lists the examples supplied to the model. These IDs explain re
 ## Local data and boundaries
 
 - The SQLite database lives in `data/` by default; use `--data-dir /private/location` to change it. This folder is ignored by Git. The database contains private writing and is **not encrypted at rest**; use OS disk encryption and appropriate backups.
-- Offline app operations stay local. **Codex generation sends selected confirmed examples, feedback, confirmed prior packets, context and brief through your configured Codex account.** Pending, assisted, rejected and held-out samples are excluded from style evidence. Separately, explicitly requesting Codex context analysis sends the selected non-held-out candidate, even if its authorship is pending, for reviewable analysis.
+- Offline app operations stay local. **Codex generation sends selected confirmed examples, feedback, active contextual language lessons, confirmed prior packets, context and brief through your configured Codex account.** Pending, assisted, rejected and held-out samples are excluded from style evidence. Separately, explicitly requesting Codex context analysis sends the selected non-held-out candidate, even if its authorship is pending, for reviewable analysis.
 - The local server binds to loopback and checks Host/Origin plus a session token for mutations. It is intended for one trusted OS user, not a shared hosted service.
 - The Codex process runs in a temporary directory with a read-only sandbox, ignored user config, ephemeral mode, and major tool/integration features disabled. This narrows its behavior; it is not a new OS-level confidentiality boundary against administrator-managed configuration. The adapter does not supply arbitrary local files or source instructions as executable requests.
 - Deleting a sample removes it from subsequent retrieval/profile exports. Previously downloaded exports, browser-capture files, prior generated drafts, backups and any provider-side retention are separate copies.
-- No remote repository, deployment, background monitor, or personal-data ingestion is created merely by starting the app.
+- Starting the app does not deploy it, start a background monitor, or ingest personal data automatically. The private source repository is separate from local writing and the database.
 
 ## Developer commands
 

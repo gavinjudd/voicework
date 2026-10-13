@@ -4,19 +4,19 @@ Current implementation guide. Read [RESEARCH.md](RESEARCH.md) for external evide
 
 ## Product promise
 
-Help a person get useful drafts that sound appropriate for them **in this situation**, and carry their writing preferences between tools. Start from writing they actually recognize as theirs. Learn through small choices, edits, and context labels. Show the evidence behind the profile and what remains unknown.
+Help a person get useful drafts that sound appropriate for them **in this situation**, and carry their writing preferences between tools. Start with direct teaching and small comparisons; authentic writing samples are optional. Learn through explicit rules, preferred and avoided phrasing, edits, and context labels. Show the evidence behind the profile and what remains unknown.
 
 “Write in my voice” alone is an established feature. The product hypothesis is that **reviewed authorship, situational preferences, presentation choices, and an inspectable portable profile** make personalization more useful and trustworthy. This hypothesis needs user evaluation; the prototype does not demonstrate market demand or writing fidelity.
 
 ## The first useful loop
 
-1. **Find a candidate.** Paste a short sample, scan a user-selected local folder, or import a selected browser passage. Everything enters review. Do not start with an automatic whole-computer scan.
-2. **Confirm the evidence.** The user labels it `confirmed`, `assisted`, `rejected`, or leaves it `pending`. They add channel, audience, intent, stakes, relationship, and scenario. “Work” or a filename is insufficient to reconstruct the situation. One document can contain quotes, templates, other people's words, and AI assistance.
-3. **Practice for a real situation.** Give two short drafts for the same brief and context. Choose A, B, or neither; optionally edit and say why. Ask about a concrete distinction such as paragraph length or opening rather than demanding a full style manifesto.
-4. **See what changed.** Retain the choice, both alternatives, edits, reasons, and presentation settings. Show contribution counts and contexts covered. A selected output becomes preference evidence, not an authentic writing sample.
+1. **Teach a small distinction.** Add a context-specific rule and preferred or avoided wording, or start a comparison immediately. No writing sample is required. Direct lessons can be edited, disabled or deleted.
+2. **Practice for a real situation.** Give two short drafts for the same context. Use a mixed comparison or focus on vernacular, syntax, diction or rhythm. Choose A, B, or neither; optionally edit and say why. Ask about one concrete distinction rather than demanding a full style manifesto.
+3. **Add authentic evidence when useful.** Paste a sample, scan a selected local folder, or import a browser passage. Everything enters review. Label it `confirmed`, `assisted`, `rejected`, or leave it `pending`, and review channel, audience, intent, stakes, relationship and scenario. A document can contain quotes, templates, other people's words and AI assistance.
+4. **See what changed.** Retain lessons separately from comparison choices, both alternatives, edits, reasons and presentation settings. Show contribution counts and contexts covered. A lesson or selected output establishes a preference, not an authentic writing sample or authorship claim.
 5. **Use and export it.** Generate a draft from a factual brief, inspect evidence references, adjust presentation, and export a compact profile for another assistant. Raw examples are opt-in.
 
-A practical first session is a few reviewed samples and several short rounds in one context. That is a usability target, not a scientific minimum or a claim that the app has learned the whole person. Allow stopping, skipping, and “neither.” XP rewards contributions; it must never appear as an accuracy, confidence, or personality score.
+A practical first session is one direct lesson and a few short rounds in one context, with reviewed samples added if available. That is a usability target, not a scientific minimum or a claim that the app has learned the whole person. Allow stopping, skipping, and “neither.” XP rewards contributions; it must never appear as an accuracy, confidence, or personality score.
 
 ## What is being learned
 
@@ -25,16 +25,20 @@ Keep three concepts separate:
 | Layer | Examples | Authority |
 | --- | --- | --- |
 | Observed writing | Sentence lengths, paragraph breaks, openings, punctuation | Descriptive patterns from confirmed samples; affected by source and context |
-| Stated or demonstrated preference | “No greeting for an ongoing teammate chat”; prefers B to A | User feedback, scoped to its situation; may be aspirational rather than habitual |
+| Stated or demonstrated preference | A direct language lesson; “No greeting for an ongoing teammate chat”; prefers B to A | User teaching or feedback, scoped to its situation; may be aspirational rather than habitual |
 | Facts for this draft | Dates, names, numbers, achievements, commitments, uncertainty | The current factual brief; samples are style references, not authority to import old facts |
 
 Context is multidimensional. A hiring-manager email and an internal incident update can both be “work” but require different pacing, directness, structure, and warmth. `context.py` now returns reviewable suggestions for all six fields, with rationale, uncertainty and authorship cautions. Offline heuristics or Codex analyze the selected candidate. Applying a preview edits context only; authorship confirmation remains separate. Held-out samples cannot be sent for this analysis. Discovered candidates without supplied context receive provisional offline suggestions; ambiguous fields remain unknown.
 
 Presentation is part of voice: paragraphs versus bullets, heading frequency, paragraph length, openings and salutations, signoffs, emoji, and level of detail. Record explicit preferences for these dimensions beside wording preferences. Do not infer a permanent global rule from a single short exchange. Conflicting examples may reflect different situations or changing preferences.
 
+Language lessons make wording teachable directly: **vernacular** covers familiar expressions and register; **syntax** covers sentence construction; **diction** covers word choice; **rhythm** covers pacing and variation in sentence length. Each lesson stores a context, dimension, rule and preferred/avoided phrasing. Enabled matching lessons enter calibrated prompts; exports include all enabled lessons with their declared contexts. They remain distinct from authentic samples, background priors and blinded evaluation records. Focused practice asks the model to vary a selected dimension while preserving meaning; it does not certify that all other dimensions stayed identical.
+
+Lesson matching requires the same channel and case-insensitive exact matches for any audience, intent, relationship or stakes declared on the lesson. Leave those optional conditions blank for a broader rule. Scenario text remains conditional guidance for the model rather than an enforced retrieval filter.
+
 ## Prior knowledge and authentic writing
 
-The app has no automatic access to a Codex desktop chat's hidden memory, other conversations, a different PC's filesystem, or the user's whole Google Drive. Running a new CLI instance does not transfer that context. The adapter receives explicitly supplied evidence, feedback and confirmed prior packets. The optional Chrome collector uses the existing browser session only for selected documents after permission.
+The app has no automatic access to a Codex desktop chat's hidden memory, other conversations, a different PC's filesystem, or the user's whole Google Drive. Running a new CLI instance does not transfer that context. The adapter receives explicitly supplied evidence, feedback, active contextual language lessons and confirmed prior packets. The optional Chrome collector uses the existing browser session only for selected documents after permission.
 
 Prior knowledge is a first-class record: a compact packet with label, text, source and context, initially unconfirmed. An assistant can prepare one from information explicitly available to its session; raw JSON conversation archives are rejected in this lane. The user reviews and confirms it before contextual use, or deletes and replaces it to correct the text. Confirmed packets appear separately in generation prompts and portable exports. Confirmation does not independently verify their claims or establish authorship. The app starts without personal samples or priors.
 
@@ -48,14 +52,15 @@ For PC Downloads, run the app on that PC or transfer selected files through an e
 | Discovery | Resumable user-started jobs with persistent queues/checkpoints, bounded batches, source-change warnings and cancellation; paste/import and older one-pass scan remain available |
 | Review | Authorship status, source information, reviewable context inference with reasons/uncertainty, editable context, deletion, holdout flag |
 | Prior knowledge | Separate review/confirmation/deletion of compact context packets; confirmed packets used only in matching channels and exported as prior context |
-| Practice | Pairwise options, neither, edits, reasons, structured presentation feedback |
+| Direct teaching | Context-specific language lessons, rules and preferred/avoided phrasing; edit, disable or delete; no samples required |
+| Practice | Mixed or focused vernacular/syntax/diction/rhythm comparisons; pairwise options, neither, edits, reasons, structured presentation feedback |
 | Learning | Descriptive pattern aggregation and contextual feedback supplied in prompts; no model weight updates |
 | Generation | Deterministic offline rehearsal by default; optional configured Codex CLI adapter; failures must not silently change provider |
 | Browser bridge | Passage capture plus currently visible Drive/Docs candidates; choose up to 20 for optional authenticated TXT collection, explicit failures and manual TXT attachment fallback; JSON import, no localhost push |
-| Portability | Markdown voice profile, with confirmed non-held-out examples only when explicitly requested |
+| Portability | Markdown voice profile with active lessons and confirmed priors; confirmed non-held-out examples only when explicitly requested |
 | Evaluation | Blinded baseline/calibrated drafts for identical briefs/controls, randomized labels, immutable votes, factual flags, per-channel counts; offline rehearsal excluded from real-model counts |
 
-Offline mode exercises the workflow with heuristics. It is not an AI voice model. Codex mode requires a compatible local CLI and sends the supplied prompt through that provider. Local storage does not mean cloud-backed generation stays on the device. A synthetic live Astra/`xhigh` draft passed with the app-bundled CLI 0.162.0-alpha.17.2; PATH's older 0.137.0 failed model compatibility, not authentication. This establishes working generation for that check, not personalized writing accuracy. The executable can be selected with `--codex-bin` or `VOICEWORK_CODEX_BIN`; see the [README](../README.md). The extension has not been verified installed in the user's Chrome profile.
+Offline mode exercises the workflow with heuristics and fixed focused contrasts. It stores direct lessons but does not semantically apply them or run an AI voice model. Codex mode requires a compatible local CLI and sends the supplied prompt through that provider. Local storage does not mean cloud-backed generation stays on the device. A synthetic live Astra/`xhigh` draft passed with the app-bundled CLI 0.162.0-alpha.17.2; PATH's older 0.137.0 failed model compatibility, not authentication. This establishes working generation for that check, not personalized writing accuracy. The executable can be selected with `--codex-bin` or `VOICEWORK_CODEX_BIN`; see the [README](../README.md). The extension has not been verified installed in the user's Chrome profile.
 
 Discovery covers supported readable material in selected local roots. Changed directories require a new scan for their changed remainder; completion does not erase skipped-file warnings. Chrome discovery covers rendered rows/links in one tab, not all Drive files. Direct document collection is a best-effort browser-session download bridge, not Drive OAuth/API access; sign-in, redirects, sharing rules and blocked downloads can require manual TXT attachment. A TXT import cannot preserve rich formatting or verify the attached file's source association.
 
@@ -72,7 +77,8 @@ Manual input / selected local files / browser JSON
            SQLite evidence store
                     |
        Confirmed non-held-out samples
-         + feedback + confirmed priors
+   + feedback + active language lessons
+             + confirmed priors
                     |
         Context selection + prompt
                     |
@@ -83,7 +89,7 @@ Manual input / selected local files / browser JSON
       Preference record / profile export
 ```
 
-Context-analysis previews feed the user review step. Evaluation uses an independent table and compares generation with and without the approved evidence; its votes never enter practice feedback or authored samples.
+Direct language lessons and sample-free practice can enter the prompt/profile path without the sample-review branch. Context-analysis previews feed the user review step. Evaluation uses an independent table and compares generation with and without approved evidence and contextual teaching; its votes never enter practice feedback or authored samples. Source is published in the private [gavinjudd/voicework repository](https://github.com/gavinjudd/voicework); local user data remains separate.
 
 Imported text is untrusted evidence, including any instructions embedded in it. It must not become application instructions or trigger actions. Keep raw source text distinct from profile assertions and generated outputs. Excluding or deleting a sample must remove it from subsequent retrieval/export; previously downloaded files and provider copies cannot be retroactively erased by deleting the local record.
 
@@ -97,7 +103,7 @@ These are generation instructions, not enforced factual guarantees. Review remai
 
 ## Evaluation before bigger training
 
-The implemented evaluation creates baseline and calibrated drafts using the same scenario, factual brief, provider and neutral controls. Only the calibrated draft receives approved examples, preferences and confirmed priors. Display order is randomized; mapping and candidate-specific warnings stay hidden until the immutable rating. Choices are A, B, tie or neither, with a factual-issue flag and notes. Evaluation records stay separate from training. Codex ratings contribute raw preference counts; offline ratings are rehearsal only. A win and a factual flag may coexist, so the counts do not certify correctness. Revision effort and presentation fit can be recorded in notes; dedicated measurements remain future work.
+The implemented evaluation creates baseline and calibrated drafts using the same scenario, factual brief, provider and neutral controls. Only the calibrated draft receives approved examples, preferences, active contextual language lessons and confirmed priors. Display order is randomized; mapping and candidate-specific warnings stay hidden until the immutable rating. Choices are A, B, tie or neither, with a factual-issue flag and notes. Evaluation records stay separate from training. Codex ratings contribute raw preference counts; offline ratings are rehearsal only. A win and a factual flag may coexist, so the counts do not certify correctness. Revision effort and presentation fit can be recorded in notes; dedicated measurements remain future work.
 
 Hold out whole source documents and their versions, threads, and near-duplicates before computing profiles or optimizing prompts. A held-out sample must not appear as an example, profile statistic, feedback-derived rule, or optimizer input. Manually reserving one sample does not automatically establish those broader isolation guarantees. Use a fixed test set for final comparison, separate from development/validation. Keep in-context performance and transfer to a new context separate.
 
