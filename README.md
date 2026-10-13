@@ -2,7 +2,7 @@
 
 A local writing practice studio that learns how you write **for a particular audience, situation, and purpose**—including how you present it.
 
-Start without samples: teach a language rule, name phrases you prefer or avoid, and compare drafts for a concrete situation. Optionally add reviewed writing to ground the profile in authentic examples. Keep a portable reference for vernacular, sentence structure, word choice, rhythm, and presentation. Personal texting and professional writing retain separate contextual evidence.
+Start without samples: write a useful draft, edit it your way, and choose which corrections to remember. Preview the takeaway and its context before saving it; undo a remembered correction when it stops helping. Focused practice and direct language lessons remain available. Optionally add reviewed writing to ground the profile in authentic examples. Personal texting and professional writing retain separate contextual evidence.
 
 Source is published in the private [gavinjudd/voicework repository](https://github.com/gavinjudd/voicework).
 
@@ -36,13 +36,13 @@ Offline mode is explicitly labeled **rehearsal**. It persists lessons, review an
 
 ## First useful session
 
-1. **Teach directly:** add a context-specific language lesson with a rule and preferred or avoided phrasing. Teach vernacular, syntax, diction or rhythm without uploading writing. Edit, disable or delete lessons as preferences change.
-2. **Practice:** compare two messages for a concrete situation, with a mixed comparison or a focus on vernacular, syntax, diction or rhythm. Choose A, B, or neither; rewrite a line and explain why. Presentation feedback also covers prose/bullets, paragraph length, openings, sign-offs, emoji and detail. Samples are optional.
-3. **Add evidence when useful:** paste writing, import browser captures, or discover files in a chosen folder. Review suggested context and separately mark the passage as yours, AI-assisted, or not yours. Context suggestions and language lessons never confirm authorship. Nothing scans automatically.
-4. **Write:** describe what you want to say and move the controls. Greater intensity changes style, never grants permission to invent facts or accomplishments.
-5. **Prior knowledge:** add compact background or guidance with a source and context, then explicitly confirm it for use. It remains separate from authored samples.
-6. **Evaluate:** compare a baseline and calibrated draft for the same brief, with randomized labels hidden until your vote. Choose either, tie, or neither; flag factual issues. Evaluation votes do not train the profile.
-7. **Voice profile:** export a Markdown reference containing patterns, contextual feedback, active language lessons and confirmed prior packets. Raw authored examples are excluded unless you explicitly include them. Bring the reference into Codex, Cursor, or another writing workflow.
+1. **Write and edit:** describe a real situation, generate a draft, and edit the result directly. Copy uses the edited text. Edits and intensity controls affect this draft only; they do not automatically train the profile.
+2. **Remember a useful correction:** review the before/after wording and a plain-language takeaway. Save it for similar situations with a specific audience, intent, relationship or stakes, or deliberately broaden it to the whole channel. Meaning/fact corrections stay with the draft. Remembered corrections remain preferences, not authored samples.
+3. **Check the change:** use a fresh brief to compare drafts with and without one remembered correction, holding the other current guidance constant. Choose which sounds more like you, then separately assess meaning and editing effort for each option. Labels are hidden until you rate. Results never train the profile or automatically activate or undo a rule.
+4. **Undo when needed:** correction history retains the original change and a persistent undo action. Undo disables that correction's unchanged lesson, preserving unrelated lessons. If the lesson has since been edited, review it in the profile instead of overwriting the newer work.
+5. **Practice or teach directly:** focused comparisons and language lessons support vernacular, syntax, diction, rhythm, and presentation without samples. They remain useful when you want to work on a particular distinction.
+6. **Add evidence when useful:** paste writing, import browser captures, or discover files in a chosen folder. Review suggested context and separately confirm authorship. Compact prior-knowledge packets also require explicit review. Nothing scans automatically.
+7. **Export your profile:** take contextual preferences, active lessons and confirmed priors into another writing workflow. Raw authored examples are excluded unless you explicitly include them.
 
 Contribution points measure participation. They are not an accuracy score. Keep some genuine writing marked as held out; it is excluded from learning evidence and prompt/export examples. A held-out partition alone is not a completed quality evaluation.
 
@@ -64,6 +64,8 @@ The current system uses context-matched examples, descriptive writing patterns, 
 
 Context analysis uses offline heuristics or the selected Codex provider and returns a reviewable preview. Prior packets store background or guidance, never authentic writing. Blinded evaluation is a separate lane: both drafts receive the same brief and neutral controls, while only the calibrated draft receives approved examples, preferences, active contextual lessons and confirmed priors. Ratings are immutable and excluded from learning. Counts include baseline wins, calibrated wins, ties, neither and factual flags by channel; offline comparisons are counted separately as rehearsal. Preference counts do not establish achieved writing accuracy or factual correctness.
 
+Correction quality checks answer a narrower question: does this particular saved correction help? Both variants receive the same current evidence and other preferences; only the selected correction differs. Generation order and display labels are randomized. The saved case records the model, controls and fingerprints of the fixed inputs. This is not a replay of an entire historical profile. Voice choice, meaning judgments and expected editing effort remain separate, and offline checks never count as real-model results. Use multiple fresh situations before drawing a conclusion; one favorable comparison does not establish improvement.
+
 A generated draft lists the examples supplied to the model. These IDs explain retrieval, not a claim that a particular sentence came from a particular source. Strong controls are guidance to the model, not a verified factuality guarantee; review important drafts before using them.
 
 [PRODUCT.md](docs/PRODUCT.md) separates the implemented workflow from future source grouping, fact checks, prompt optimization and weight training. [RESEARCH.md](docs/RESEARCH.md) records the source-backed research and reuse decisions.
@@ -71,10 +73,12 @@ A generated draft lists the examples supplied to the model. These IDs explain re
 ## Local data and boundaries
 
 - The SQLite database lives in `data/` by default; use `--data-dir /private/location` to change it. This folder is ignored by Git. The database contains private writing and is **not encrypted at rest**; use OS disk encryption and appropriate backups.
+- The current draft, edits, and pending correction preview are also saved in this browser's local storage so navigation and refresh do not lose them. They remain separate from saved lessons and the SQLite database.
 - Offline app operations stay local. **Codex generation sends selected confirmed examples, feedback, active contextual language lessons, confirmed prior packets, context and brief through your configured Codex account.** Pending, assisted, rejected and held-out samples are excluded from style evidence. Separately, explicitly requesting Codex context analysis sends the selected non-held-out candidate, even if its authorship is pending, for reviewable analysis.
 - The local server binds to loopback and checks Host/Origin plus a session token for mutations. It is intended for one trusted OS user, not a shared hosted service.
 - The Codex process runs in a temporary directory with a read-only sandbox, ignored user config, ephemeral mode, and major tool/integration features disabled. This narrows its behavior; it is not a new OS-level confidentiality boundary against administrator-managed configuration. The adapter does not supply arbitrary local files or source instructions as executable requests.
 - Deleting a sample removes it from subsequent retrieval/profile exports. Previously downloaded exports, browser-capture files, prior generated drafts, backups and any provider-side retention are separate copies.
+- Explicitly remembering a correction stores its original and revised text locally as provenance. Undo stops its lesson from guiding future drafts; it does not erase that history or previously generated quality-check outputs. Correction source drafts are not automatically included in exported writing examples.
 - Starting the app does not deploy it, start a background monitor, or ingest personal data automatically. The private source repository is separate from local writing and the database.
 
 ## Developer commands
@@ -85,7 +89,7 @@ python3 -m compileall -q voicework
 node --check web/app.js
 node --check extension/popup.js
 node --check extension/background.js
-node --test tests/test_browser_discovery.js
+node --test tests/test_browser_discovery.js tests/test_correction_diff.js
 ```
 
 Node is optional for syntax checks, not required to run the app. See [BUILD_CONTRACT.md](docs/BUILD_CONTRACT.md) for the API and [AGENTS.md](AGENTS.md) for repository development rules.

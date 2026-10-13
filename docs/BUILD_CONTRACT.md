@@ -6,6 +6,8 @@ Local-first personal writing calibration app. Python 3.9+ stdlib HTTP/SQLite bac
 - `voicework/discovery.py`, `discovery_jobs.py`: bounded extraction and persistent resumable scan queues.
 - `voicework/context.py`: provisional context analysis and separate prior packets.
 - `voicework/language.py`: editable contextual language lessons and focused-practice validation.
+- `voicework/corrections.py`: atomic remembered corrections, source provenance, context scope and guarded undo.
+- `voicework/quality.py`: blinded checks isolating one correction, independent meaning/effort ratings and input fingerprints.
 - `voicework/evaluation.py`: blinded comparisons and immutable ratings, independent of training feedback.
 - `voicework/provider.py`: explicit offline/Codex generation and context-analysis adapter.
 - `web/`, `extension/`, `tests/`: app interface, deliberate Chrome capture/Docs collector, and verification.
@@ -49,6 +51,26 @@ PATCH /api/language-lessons/:id {context?,dimension?,guidance?,preferred?,avoide
 DELETE /api/language-lessons/:id {} -> {ok:true}.
 Disabled lessons remain editable but are excluded from subsequent generation, exports and active contribution counts. Deletion removes the local lesson; previous drafts and downloaded exports remain separate copies.
 
+## Remembered draft corrections
+
+Draft editing is local to the browser until the user explicitly remembers a correction. Copy uses the revised draft. Context is captured with generation so a later change to the compose form does not silently change the correction's source context. Intensity controls are temporary; facts/meaning edits cannot become style lessons through this API.
+
+POST /api/corrections {original_text,revised_text,guidance,preferred?,avoided?,context,scope,dimension?,kind:'style'} -> {correction,lesson}. Original/revised text is at most 30,000 characters and must differ. Guidance is required and at most 2,000 characters; preferred/avoided phrases at most 500 each. Dimension defaults to diction. Scope is similar|channel. Similar requires at least one nonempty audience, intent, relationship or stakes condition; channel explicitly clears narrower conditions. Save the correction and its enabled language lesson atomically. Neither becomes an authored sample.
+
+GET /api/corrections -> {corrections}; GET /api/state also includes corrections. Status distinguishes active, undone, inactive, lesson_changed and lesson_deleted. Original/revised text and the lesson snapshot provide local provenance, not additional training examples.
+
+POST /api/corrections/:id/undo {} -> {correction,lesson}. Disable only the linked lesson if its content still matches the saved correction; preserve all unrelated lessons. Repeated undo is safe. A later content edit causes a conflict instead of overwriting the edited lesson. History remains after undo; this is not a deletion operation.
+
+## Correction quality checks
+
+POST /api/corrections/:id/checks {context,brief} -> {case}. The selected correction must be active, unchanged and applicable to the requested context. Require a fresh brief rather than the original/revised source text. Both variants use identical current eligible evidence, other preferences, context, brief, model and neutral controls; only the selected correction lesson differs. This isolates one correction rather than restoring a complete historical profile. Randomize generation and display order independently. Save no case when either generation fails.
+
+POST /api/quality-checks/:id/rate {choice,meaning,effort,notes?} -> {case,summary}. Choice is a|b|tie|neither. Meaning requires an a and b judgment of preserved|changed|unsure. Effort requires an a and b judgment of none|light|substantial. Ratings are immutable and never enter training. Candidate mapping and warnings remain hidden until rating, then previous/updated identify without/with the correction. Input provenance uses identifiers and fingerprints instead of additional raw sample snapshots.
+
+GET /api/state includes quality_checks and quality_summary. Codex observations and offline rehearsal stay separate, as do voice preference, meaning problems and subjective editing effort. Checks do not automatically apply or undo teaching, assert factual correctness, or establish a writing-accuracy percentage.
+
+QualityCase {id,correction_id,context,brief,options:[{id,text}],provider,model,status,created_at,warnings}. After rating it also contains mapping,choice,meaning,effort,notes,rated_at,result,observations:{previous:{meaning,effort},updated:{meaning,effort}},controls,provenance. Unrated responses never expose mapping, provenance or candidate-specific warnings. QualitySummary {total,unrated,rated_real,previous_wins,updated_wins,ties,neither,meaning_issues,meaning:{previous:{preserved,changed,unsure},updated:{preserved,changed,unsure}},effort:{previous:{none,light,substantial},updated:{none,light,substantial}},offline_count,rated_offline,per_correction:[{correction_id,...counts}]}. Outcome counts describe rated Codex checks only; offline participation is counted separately.
+
 GET /api/priors -> {priors}.
 POST /api/priors {label,text,source?,context?} -> {prior}; unconfirmed.
 PATCH /api/priors/:id {confirmed:bool} -> {prior}.
@@ -68,4 +90,4 @@ Offline is deterministic rehearsal and heuristic context inference. Focused offl
 Selected-passage capture and current-tab visible Google Docs discovery export JSON for manual local import. Discovering candidates does not collect all Drive content. Users explicitly select up to 20 documents and grant optional docs.google.com access for best-effort authenticated TXT export. Redirects/access failures are explicit; manually download and attach TXT to a candidate when necessary. No Drive API/OAuth connector, whole-account enumeration, other-tab/history crawl, or localhost push. TXT loses rich formatting; source associations and authorship still require user review. Session candidate cap is 200; extraction/batch limits are documented in extension/README.md. Installed-extension behavior has not been verified in the user's Chrome profile.
 
 ## UI
-Calm, dense polished interface, warm off-white, dark ink, restrained teal accent; no generic marketing first page, no gradients. Name Voicework working name. Navigation Practice / Samples / Write / Voice profile. Empty state starts with focused comparisons or direct language teaching; samples are optional. Practice A/B/neither plus edit, reason, presentation preferences and focus. Lessons can be created, edited, disabled/re-enabled or deleted. Stats show contributions + context coverage, not accuracy. Samples review and contextual label edit, source paths, status, holdout toggle, local folder discovery form and JSON import. Write controls and evidence references. Profile portable export and explanation of provider status. Accessible keyboard controls, responsive, safe text rendering, meaningful loading/errors. Default no samples. Can offer explicitly labeled fictional examples for rehearsal only, never real-user-authorship inference.
+Calm, dense polished interface, warm off-white, dark ink, restrained teal accent; no generic marketing first page, no gradients. Name Voicework working name. Navigation Write / Practice / Samples / Check fit / Voice profile. Start with useful drafting, editing and optional remembered corrections; focused practice and direct lessons remain available without samples. Correction scope and takeaway are reviewable, with persistent history/undo and separate quality checks. Practice A/B/neither plus edit, reason, presentation preferences and focus. Lessons can be created, edited, disabled/re-enabled or deleted. Stats show contributions + context coverage, not accuracy. Samples review and contextual label edit, source paths, status, holdout toggle, local folder discovery form and JSON import. Profile portable export and explanation of provider status. Accessible keyboard controls, responsive, safe text rendering, meaningful loading/errors. Default no samples. Can offer explicitly labeled fictional examples for rehearsal only, never real-user-authorship inference.

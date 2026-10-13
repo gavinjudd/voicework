@@ -2,8 +2,8 @@
 
 ## Passed
 
-- `python3 -m unittest discover -s tests -q`: **75 tests passed**, including live HTTP integration tests using temporary loopback servers.
-- `node --test tests/test_browser_discovery.js`: **11 tests passed** for document identification, selection limits, import schema, long-text splitting, Unicode boundaries, rejected content, and permission boundaries.
+- `python3 -m unittest discover -s tests -q`: **94 tests passed**, including live HTTP integration tests using temporary loopback servers.
+- `node --test tests/test_browser_discovery.js tests/test_correction_diff.js`: **23 tests passed** for browser discovery, Unicode-safe correction spans, presentation edits, long edits, and narrow-scope validation. **117 automated tests total.**
 - Python byte-compilation and JavaScript syntax checks for the app, extension popup, service worker, and discovery module.
 - Synthetic API walkthroughs: authorship review, holdout exclusion, comparison feedback, presentation controls, portable export, deletion, atomic import, context inference, reviewed prior packets, blind ratings, and resumable discovery. Host, origin, content-type, and mutation-token checks passed.
 - Browser interaction: provisional context suggestions and application without changing authorship; a blind offline comparison with concealed labels; a tie rating and label reveal; rehearsal results excluded from AI results; prior packet review and confirmed-prior export. Browser console reported no errors in the final QA session.
@@ -18,12 +18,18 @@
 - Focused syntax practice generated a two-sentence option and a subordinate-clause alternative with the same facts. A chosen option, reason, and rewrite were saved and appeared in the portable profile alongside the separate diction lesson.
 - Browser checks covered direct-lesson creation, editing, disabling, re-enabling, and export exclusion while disabled. Export previews are cleared when workspace data refreshes, preventing revoked lessons from remaining in a stale preview.
 - Eleven new Python tests cover language-lesson persistence, validation, context isolation, revocation/deletion, zero-sample API and provider behavior, focus migration, and exclusion from the uncalibrated evaluation baseline. Practice at 390 × 844px had no horizontal overflow; the QA browser recorded no console errors.
+- The editable-draft flow adds 19 Python tests and 12 JavaScript tests. Coverage includes atomic correction/lesson saves, context boundaries, facts-only rejection, idempotent undo, changed-lesson conflicts, blinded comparisons, concurrent correction changes, fixed comparison inputs, and ratings that never become training feedback.
+- A separate synthetic browser workspace completed editing, refresh recovery of an unsaved correction, an explicit teammates-only save, and live Astra generation on a fresh brief. The original draft used “Please review”; the correction requested “Can you review.” The blind check applied that wording to a new message while preserving its Tuesday deadline. Synthetic QA ratings verified label reveal, separate meaning/editing-effort observations, and persistence; they are not personal-fidelity ratings.
+- The correction walkthrough also verified facts/meaning edits cannot be remembered as style, changing the compose audience does not change the generated draft's captured context, an explicit broad-scope preview, and undoing a remembered correction while retaining the edited draft. Draft edit undo/restore and the replacement confirmation/cancel path worked. Editing and rating added no authored samples or practice feedback.
+- Write and the correction quality check had no horizontal overflow at 390 × 844px. The final QA browser recorded no warnings or errors. The temporary viewport override was reset.
 
 ## Not established
 
 - **Correction to the earlier blocker diagnosis:** the PATH CLI (0.137.0) was too old for Astra. Its terminal response was HTTP 400 requesting a newer CLI; unrelated catalog text had triggered a misleading login message. The existing login works with the current bundled CLI. Voicework now reports that failure correctly and supports an explicit executable path. Global configuration and credentials were not changed.
 - **Installed Chrome extension operation:** the extension is packaged and tested at the module/schema level. Live Drive markup, Google authentication/export responses, optional permissions, and installation have not been exercised in the user's browser. Redirected or blocked TXT exports have a manual download-and-attach fallback.
 - **Personal writing accuracy:** no genuine personal corpus or user-rated AI benchmark was run. The blind evaluation feature is implemented; no improvement claim is established. Offline rehearsals are excluded from AI evaluation counts.
+- **Clipboard round-trip:** the Copy action reported success and its handler copies the edited draft, but the automation browser's virtual clipboard returned no data. A clipboard paste round-trip was not established.
+- Correction checks isolate the selected lesson with and without it in the current profile. They do not restore an entire historical profile, automatically verify facts, or automatically approve or roll back a lesson. Meaning preservation and editing effort are user ratings.
 - Discovery is user-started and resumable across accessible chosen directories, with explicit exclusions, caps, and warnings. It does not prove exhaustive whole-computer coverage. Drive discovery sees rendered candidates in the current tab; it does not crawl the whole account.
 - Context suggestions are provisional heuristics or optional model suggestions, not verified reconstruction of an original conversation or proof of authorship.
 - Model-weight fine-tuning, automated prompt optimization, source-family holdout grouping, and automated factuality verification are not implemented. The implemented learning is contextual retrieval and saved preference feedback.

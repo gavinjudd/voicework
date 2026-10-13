@@ -15,6 +15,8 @@ from .context import PriorStore, infer_context
 from .evaluation import EvaluationStore
 from .discovery_jobs import DiscoveryJobs
 from .language import LanguageLessonStore, validate_focus
+from .corrections import CorrectionStore, CorrectionConflict
+from .quality import QualityStore
 
 MAX_BODY_BYTES = 8 * 1024 * 1024
 
@@ -65,6 +67,8 @@ class VoiceworkServer(ThreadingHTTPServer):
         self.provider = provider
         self.priors = PriorStore(store.path)
         self.language_lessons = LanguageLessonStore(store.path)
+        self.corrections = CorrectionStore(store.path)
+        self.quality_checks = QualityStore(store.path)
         self.evaluations = EvaluationStore(store.path)
         self.discovery_jobs = DiscoveryJobs(store)
         self.web_root = Path(web_root).resolve()
@@ -184,6 +188,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, exc.status)
         except KeyError:
             self._json({"error": "Record not found"}, 404)
+        except CorrectionConflict as exc:
+            self._json({"error": str(exc)}, 409)
         except ValueError as exc:
             self._json({"error": str(exc)}, 400)
         except (BrokenPipeError, ConnectionResetError):
@@ -239,6 +245,8 @@ class Handler(BaseHTTPRequestHandler):
             lessons = self.server.language_lessons.list()
             return self._json({"samples": samples, "rounds": rounds, "feedback": feedback,
                 "profile": build_profile(samples, feedback, lessons), "language_lessons": lessons,
+                "corrections": self.server.corrections.list(), "quality_checks": self.server.quality_checks.list_cases(),
+                "quality_summary": self.server.quality_checks.summary(),
                 "priors": self.server.priors.list(), "evaluations": self.server.evaluations.list_cases(),
                 "evaluation_summary": self.server.evaluations.summary(), "discovery_jobs": self.server.discovery_jobs.list(),
                 "settings": {"provider": getattr(provider, "mode", "offline"), "model": getattr(provider, "model", None)},
@@ -256,6 +264,35 @@ class Handler(BaseHTTPRequestHandler):
                     packet = {key: prior[key] for key in ("label", "text", "context", "source")}
                     markdown += "\n" + "\n".join("> " + line.replace("<", "&lt;").replace(">", "&gt;") for line in json.dumps(packet, ensure_ascii=False, indent=2).splitlines()) + "\n"
             return self._json({"markdown": markdown, "filename": "VOICE_PROFILE.md"})
+        if method == "GET" and path == "/api/corrections":
+            return self._json({"corrections": self.server.corrections.list()})
+        if method == "POST" and path == "/api/corrections":
+            return self._json(self.server.corrections.add(body), 201)
+        if method == "POST" and path.startswith("/api/corrections/"):
+            parts = path.split("/")
+            if len(parts) != 5 or not parts[3] or parts[4] not in {"undo", "checks"}:
+                raise HTTPError(404, "Correction action not found")
+            if parts[4] == "undo":
+                self._fields(body, set())
+                return self._json(self.server.corrections.undo(parts[3]))
+            self._fields(body, {"context", "brief"})
+            correction, target_lesson, context, brief = self.server.corrections.prepare_check(parts[3], body.get("context"), body.get("brief", ""))
+            evidence = retrieve(store.samples(), context)
+            preferences = contextual_preferences(store.feedback(), context) + self._prior_preferences(context) + self._language_preferences(context)
+            if not self.server.generation_slots.acquire(blocking=False):
+                raise HTTPError(429, "Generation is busy; try again shortly")
+            try:
+                case = self.server.quality_checks.create_case(correction, context, brief, provider, evidence, preferences, target_lesson)
+                return self._json({"case": case}, 201)
+            finally:
+                self.server.generation_slots.release()
+        if method == "POST" and path.startswith("/api/quality-checks/"):
+            parts = path.split("/")
+            if len(parts) != 5 or not parts[3] or parts[4] != "rate":
+                raise HTTPError(404, "Quality check action not found")
+            self._fields(body, {"choice", "meaning", "effort", "notes"})
+            case = self.server.quality_checks.rate_case(parts[3], body)
+            return self._json({"case": case, "summary": self.server.quality_checks.summary()})
         if method == "GET" and path == "/api/language-lessons":
             return self._json({"language_lessons": self.server.language_lessons.list()})
         if method == "POST" and path == "/api/language-lessons":
@@ -388,12 +425,12 @@ class Handler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/feedback":
             feedback = store.add_feedback(body)
             return self._json({"feedback": feedback, "profile": build_profile(store.samples(), store.feedback(), self.server.language_lessons.list())}, 201)
-        if method == "GET" and path in {"/", "/index.html", "/app.js", "/styles.css"}:
+        if method == "GET" and path in {"/", "/index.html", "/app.js", "/styles.css", "/correction-diff.mjs"}:
             name = "index.html" if path == "/" else path[1:]
             asset = self.server.web_root / name
             if not asset.is_file() or asset.is_symlink():
                 raise HTTPError(404, "App asset not found")
-            types = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
+            types = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
             return self._respond(asset.read_bytes(), types[asset.suffix])
         raise HTTPError(404, "Route not found")
 

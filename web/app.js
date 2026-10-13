@@ -1,16 +1,44 @@
+import {changedSpan, hasSimilarScope, correctionScopeSummary} from './correction-diff.mjs';
 const app = document.querySelector('#app');
 const toastRegion = document.querySelector('#toast-region');
-const routes = { practice: 'Practice', samples: 'Samples', write: 'Write', evaluate: 'Check fit', profile: 'Voice profile' };
+const routes = { write: 'Write', practice: 'Practice', samples: 'Samples', evaluate: 'Check fit', profile: 'Voice profile' };
 const ui = {
-  route: routes[location.hash.slice(1)] ? location.hash.slice(1) : 'practice',
+  route: routes[location.hash.slice(1)] ? location.hash.slice(1) : 'write',
   filter: 'pending', context: { channel: 'work', audience: '', intent: '', stakes: '', relationship: '', scenario: '' },
   selections: new Map(), draft: null, brief: '', controls: { polish: 45, detail: 45, warmth: 50, assertiveness: 50, structure: 'auto' },
   scanResult: null, scanRunning: null, exportText: '', includeExamples: false, practiceFocus: 'vernacular',
   lessonDraft: {dimension: 'vernacular', guidance: '', preferred: '', avoided: ''},
+  editedDraft: '', draftUndo: null, rememberDraft: null, replacePrompt: false, generating: false, editorStorageError: false,
+  qualityForm: {correctionId: '', brief: '', context: null}, qualityVotes: {},
 };
 let state;
 let nextId = 0;
 let toastTimer;
+const editorStorageKey = 'voicework-editor-v2';
+function persistEditor() {
+  try {
+    localStorage.setItem(editorStorageKey, JSON.stringify({brief: ui.brief, draft: ui.draft, editedDraft: ui.editedDraft, draftUndo: ui.draftUndo, context: ui.context, controls: ui.controls, rememberDraft: ui.rememberDraft, qualityForm: ui.qualityForm, qualityVotes: ui.qualityVotes}));
+    ui.editorStorageError = false;
+  } catch { ui.editorStorageError = true; }
+}
+try {
+  const saved = JSON.parse(localStorage.getItem(editorStorageKey) || 'null');
+  if (saved && typeof saved === 'object') {
+    if (typeof saved.brief === 'string') ui.brief = saved.brief.slice(0, 15000);
+    if (saved.draft && typeof saved.draft.text === 'string' && saved.draft.text.length <= 30000) {
+      ui.draft = saved.draft;
+      ui.editedDraft = typeof saved.editedDraft === 'string' ? saved.editedDraft.slice(0, 30000) : saved.draft.text;
+      ui.draftUndo = typeof saved.draftUndo === 'string' ? saved.draftUndo.slice(0, 30000) : null;
+      if (saved.rememberDraft && typeof saved.rememberDraft.original_text === 'string' && typeof saved.rememberDraft.revised_text === 'string') ui.rememberDraft = saved.rememberDraft;
+    }
+    if (saved.context && typeof saved.context === 'object') for (const key of Object.keys(ui.context)) if (typeof saved.context[key] === 'string') ui.context[key] = saved.context[key];
+    if (saved.controls && typeof saved.controls === 'object') for (const key of Object.keys(ui.controls)) if (key === 'structure' ? ['auto','prose','bullets'].includes(saved.controls[key]) : Number.isFinite(saved.controls[key]) && saved.controls[key] >= 0 && saved.controls[key] <= 100) ui.controls[key] = saved.controls[key];
+    if (saved.qualityForm && typeof saved.qualityForm === 'object') ui.qualityForm = {...ui.qualityForm, ...saved.qualityForm};
+    if (saved.qualityVotes && typeof saved.qualityVotes === 'object') ui.qualityVotes = saved.qualityVotes;
+  }
+} catch { ui.editorStorageError = true; }
+window.addEventListener('pagehide', persistEditor);
+
 const uid = (prefix = 'field') => `${prefix}-${++nextId}`;
 const plural = (number, single, multiple = `${single}s`) => `${number} ${number === 1 ? single : multiple}`;
 const asText = value => value === null || value === undefined ? '' : typeof value === 'string' ? value : JSON.stringify(value);
@@ -160,8 +188,8 @@ function contextEditor(seed = ui.context, options = {}) {
   if (options.scenario) wrap.append(scenario);
   else more.append(scenario);
   wrap.append(details('Intent, relationship & more context', more, options.expanded));
-  if (options.remember !== false) Object.entries(controls).forEach(([key, control]) => control.addEventListener('input', () => { ui.context[key] = control.value; }));
-  return { node: wrap, get: () => Object.fromEntries(Object.entries(controls).map(([key, control]) => [key, control.value.trim()])) };
+  Object.entries(controls).forEach(([key, control]) => control.addEventListener('input', () => { if (options.remember !== false) { ui.context[key] = control.value; persistEditor(); } if (options.onChange) options.onChange(Object.fromEntries(Object.entries(controls).map(([name, input]) => [name, input.value.trim()]))); }));
+  return { node: wrap, controls, get: () => Object.fromEntries(Object.entries(controls).map(([key, control]) => [key, control.value.trim()])) };
 }
 function pageHeading(eyebrow, title, description, action) {
   return el('div', { class: 'page-heading' }, el('div', {}, el('div', { class: 'eyebrow' }, eyebrow), el('h1', {}, title), el('p', {}, description)), action);
@@ -459,35 +487,128 @@ function importPanel() {
   }, 'Importing…'); });
   return form;
 }
+function currentDraftOriginal() { return ui.draft?.original_text ?? ui.draft?.text ?? ''; }
+function currentTeachingBaseline() { return ui.draft?.teaching_baseline ?? currentDraftOriginal(); }
+function draftHasTeachingChanges() { return Boolean(ui.draft && ui.editedDraft.trim() !== currentTeachingBaseline().trim()); }
+function draftHasEdits() { return Boolean(ui.draft && ui.editedDraft !== currentDraftOriginal()); }
+function openCorrectionPreview() {
+  const original = currentTeachingBaseline();
+  if (!ui.draft || original.trim() === ui.editedDraft.trim()) { toast('Make a wording, sentence, or presentation change first. Outer whitespace alone is not a lesson.', true); return; }
+  const span = changedSpan(original, ui.editedDraft);
+  ui.rememberDraft = {original_text: original, revised_text: ui.editedDraft, guidance: '', preferred: span.phraseFits ? span.after.trim() : '', avoided: span.phraseFits ? span.before.trim() : '', context: {...(ui.draft.context || {})}, scope: 'similar', kind: '', dimension: 'diction'};
+  persistEditor(); render(); document.querySelector('#remember-correction')?.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function launchCorrectionCheck(correction) {
+  ui.qualityForm = {correctionId: correction.id, brief: '', context: {...correction.context}}; persistEditor(); navigate('evaluate');
+}
+async function generateCurrentDraft() {
+  const context = {...ui.context}; const brief = ui.brief.trim(); const controls = {...ui.controls};
+  if (!brief) throw new Error('Add what you want to say, or a rough draft, first.');
+  ui.generating = true; ui.replacePrompt = false; render();
+  try {
+    const result = await api('/draft', 'POST', {context, brief, controls});
+    ui.draft = {...result, original_text: result.text, context, brief, local_id: crypto.randomUUID()};
+    ui.editedDraft = result.text; ui.draftUndo = null; ui.rememberDraft = null; persistEditor();
+    toast('Draft ready. Edit freely; nothing is learned unless you ask to remember it.');
+  } finally { ui.generating = false; render(); }
+}
 function renderWrite() {
   const context = contextEditor(ui.context, { scenario: false });
-  const brief = el('textarea', { class: 'write-brief', placeholder: 'What do you want to say? Include the facts, the outcome you want, and anything that must stay exactly as written.', required: true, maxlength: 15000, value: ui.brief, onInput: event => { ui.brief = event.target.value; } });
+  const brief = el('textarea', { class: 'write-brief', placeholder: 'What do you want to say? Paste the message you’re answering, describe the facts, or start with a rough draft.', required: true, maxlength: 15000, value: ui.brief, disabled: ui.generating, onInput: event => { ui.brief = event.target.value; persistEditor(); } });
   const controls = el('div', { class: 'control-grid' });
   for (const [key, title, left, right] of [['polish', 'Polish', 'Light touch', 'Substantial rewrite'], ['detail', 'Detail', 'Essentials', 'Full context'], ['warmth', 'Warmth', 'Matter-of-fact', 'More personal'], ['assertiveness', 'Assertiveness', 'Gentle', 'Direct']]) {
     const output = el('output', { class: 'control-value' }, ui.controls[key]);
-    const range = input({ type: 'range', min: 0, max: 100, step: 1, value: ui.controls[key], 'aria-label': title, onInput: event => { ui.controls[key] = Number(event.target.value); output.textContent = event.target.value; } });
+    const range = input({ type: 'range', min: 0, max: 100, step: 1, value: ui.controls[key], 'aria-label': title, onInput: event => { ui.controls[key] = Number(event.target.value); output.textContent = event.target.value; persistEditor(); } });
     range.id = uid('range'); output.setAttribute('for', range.id);
     controls.append(el('div', { class: 'control-row' }, el('label', { class: 'control-label', for: range.id }, title, output), range, el('div', { class: 'range-labels' }, el('span', {}, left), el('span', {}, right))));
   }
   const structureButtons = [];
   const structure = el('div', { class: 'segmented', role: 'group', 'aria-label': 'Draft structure' }, [['auto', 'Use my preferences'], ['prose', 'Prose'], ['bullets', 'Bullets']].map(([value, label]) => {
-    const control = el('button', { type: 'button', class: `segment ${ui.controls.structure === value ? 'active' : ''}`, 'aria-pressed': ui.controls.structure === value ? 'true' : 'false', onClick: () => { ui.controls.structure = value; structureButtons.forEach(([key, button]) => { button.classList.toggle('active', key === value); button.setAttribute('aria-pressed', key === value ? 'true' : 'false'); }); } }, label);
+    const control = el('button', { type: 'button', class: `segment ${ui.controls.structure === value ? 'active' : ''}`, 'aria-pressed': String(ui.controls.structure === value), onClick: () => { ui.controls.structure = value; structureButtons.forEach(([key, target]) => { target.classList.toggle('active', key === value); target.setAttribute('aria-pressed', String(key === value)); }); persistEditor(); } }, label);
     structureButtons.push([value, control]); return control;
   }));
-  const submit = button(state.settings.provider === 'codex' ? 'Draft in my voice' : 'Preview a rehearsal draft', null, 'primary', 'write'); submit.type = 'submit';
-  const form = el('form', { class: 'panel' }, panelHeading('What are you writing?', 'Your facts. Your context. Your level of change.'), el('div', { class: 'panel-body' }, context.node, el('div', { style: 'margin-top: 20px' }, field('Your brief or rough draft', brief)), el('div', { class: 'feedback-fields' }, el('h3', {}, 'Make it fit the moment'), controls, el('div', { class: 'field' }, el('span', { class: 'field-label' }, 'Structure'), structure))), el('div', { class: 'panel-foot' }, helper('Review the result before you use it.'), submit));
-  form.addEventListener('submit', event => { event.preventDefault(); busy(submit, async () => {
-    if (!brief.value.trim()) throw new Error('Add a brief or rough draft first.');
-    ui.draft = await api('/draft', 'POST', { brief: brief.value.trim(), context: context.get(), controls: ui.controls }); render(); toast('Draft ready. Review the wording and evidence.');
-  }, 'Writing…'); });
-  const output = el('section', { class: 'panel draft-panel', 'aria-label': 'Draft result', 'aria-live': 'polite' }, panelHeading('Your draft', ui.draft ? 'A starting point for your review.' : 'A blank page, with a little backup.', ui.draft && badge(ui.draft.provider === 'codex' ? 'Codex' : 'Offline heuristic', ui.draft.provider === 'codex' ? '' : 'amber')));
+  const submit = button(ui.generating ? 'Writing…' : state.settings.provider === 'codex' ? 'Draft this message' : 'Preview a rehearsal draft', null, 'primary', 'write'); submit.type = 'submit'; submit.disabled = ui.generating;
+  const form = el('form', { class: 'panel' }, panelHeading('What are you trying to say?', 'Start with a real message. Samples are optional.'), el('div', { class: 'panel-body' }, field('Your message or rough draft', brief), context.node, details('Adjust this draft', el('div', {}, controls, el('div', {class: 'field'}, el('span', {class: 'field-label'}, 'Structure'), structure), helper('These controls affect this draft. They do not create remembered preferences.')))), el('div', { class: 'panel-foot' }, helper('Review the facts and wording before sending.'), submit));
+  form.addEventListener('submit', event => { event.preventDefault();
+    if (draftHasEdits() || ui.rememberDraft) { ui.replacePrompt = true; render(); return; }
+    busy(submit, generateCurrentDraft, 'Writing…');
+  });
+  if (ui.replacePrompt) {
+    const replace = button('Replace with a new draft', () => busy(replace, generateCurrentDraft, 'Writing…'), 'small primary');
+    form.append(el('div', {class: 'replace-notice'}, el('strong', {}, 'Replace your current edited draft?'), helper('Your edits and any unsaved memory preview will be replaced only after the new draft succeeds. Copy anything you want to keep first.'), el('div', {class: 'button-group'}, button('Keep editing this draft', () => { ui.replacePrompt = false; render(); }, 'small'), replace)));
+  }
+  const output = el('section', { class: 'panel', 'aria-label': 'Editable draft result' }, panelHeading('Your draft', ui.draft ? 'Edit the text. Decide separately what to remember.' : 'A useful first draft, then your finishing touch.', ui.draft && badge(ui.draft.provider === 'codex' ? 'Codex' : 'Offline heuristic', ui.draft.provider === 'codex' ? '' : 'amber')));
   if (ui.draft) {
+    const draftEditor = el('textarea', {class: 'draft-editor', value: ui.editedDraft, maxlength: 30000, rows: 12, 'aria-label': 'Edit your draft', readonly: ui.generating || Boolean(ui.rememberDraft)});
+    const editStatus = helper(ui.draft.teaching_baseline && !draftHasTeachingChanges() ? (ui.draft.teaching_baseline_reason === 'dismissed' ? 'Current edits kept for this message only.' : ui.draft.teaching_baseline_reason === 'undone' ? 'Your draft edit remains. The remembered lesson was undone.' : 'This correction was remembered. Future edits stay separate.') : draftHasEdits() ? 'Edited by you. These changes have not been remembered.' : 'Generated draft. Editing alone teaches nothing.');
+    const remember = button('Remember this correction', openCorrectionPreview, 'small primary'); remember.disabled = !draftHasTeachingChanges() || ui.generating || Boolean(ui.rememberDraft);
+    const undo = button(draftHasEdits() ? 'Undo my edits' : 'Restore my edits', () => {
+      if (draftHasEdits()) { ui.draftUndo = ui.editedDraft; ui.editedDraft = currentDraftOriginal(); }
+      else if (ui.draftUndo !== null) { ui.editedDraft = ui.draftUndo; ui.draftUndo = null; }
+      ui.rememberDraft = null; persistEditor(); render();
+    }, 'small quiet'); undo.disabled = (!draftHasEdits() && ui.draftUndo === null) || ui.generating || Boolean(ui.rememberDraft);
+    draftEditor.addEventListener('input', () => { ui.editedDraft = draftEditor.value; persistEditor(); remember.disabled = !draftHasTeachingChanges() || ui.generating; undo.disabled = !draftHasEdits() && ui.draftUndo === null; undo.textContent = draftHasEdits() ? 'Undo my edits' : 'Restore my edits'; editStatus.textContent = ui.draft.teaching_baseline && !draftHasTeachingChanges() ? (ui.draft.teaching_baseline_reason === 'dismissed' ? 'Current edits kept for this message only.' : ui.draft.teaching_baseline_reason === 'undone' ? 'Your draft edit remains. The remembered lesson was undone.' : 'This correction was remembered. Future edits stay separate.') : draftHasEdits() ? 'Edited by you. These changes have not been remembered.' : 'Generated draft. Editing alone teaches nothing.'; });
+    const copy = button('Copy current draft', async () => { try { await navigator.clipboard.writeText(ui.editedDraft); toast('Your current draft was copied. No learning was saved.'); } catch { toast('Clipboard access was denied. Select the draft text and copy it directly.', true); } }, 'small', 'copy');
+    output.append(draftEditor, el('div', {class: 'draft-edit-toolbar'}, editStatus, el('div', {class: 'button-group'}, copy, undo)), el('div', {class: 'panel-foot'}, helper('Only an explicitly confirmed correction becomes a lesson.'), remember));
     const evidenceSamples = (ui.draft.evidence_ids || []).map(id => state.samples.find(sample => String(sample.id) === String(id))).filter(Boolean);
-    output.append(el('div', { class: 'draft-text' }, ui.draft.text), el('div', { class: 'panel-foot' }, helper('Generated drafts are not added as authored evidence.'), button('Copy draft', async () => { try { await navigator.clipboard.writeText(ui.draft.text); toast('Draft copied.'); } catch { toast('Clipboard access was denied. Select and copy the draft text directly.', true); } }, 'small', 'copy')),
-      el('div', { class: 'evidence' }, el('div', { class: 'section-title' }, 'Source examples supplied'), evidenceSamples.length ? el('ul', { class: 'evidence-list' }, evidenceSamples.map(sample => el('li', {}, `${sample.title || 'Untitled sample'} · ${sample.context?.channel || 'work'}`))) : helper('No confirmed source samples were used.'), ui.draft.warnings?.length > 0 && el('div', { style: 'margin-top: 12px' }, ui.draft.warnings.map(warning => helper(warning)))));
-  } else output.append(el('div', { class: 'draft-empty' }, icon('feather'), el('h3', {}, 'Make the first draft yours.'), el('p', {}, 'Start with the facts on the left. Your language lessons and choices provide direction. Confirmed writing samples are optional additional evidence.')),
-    el('div', { class: 'evidence' }, el('div', { class: 'section-title' }, 'A clear foundation'), helper(`${plural(state.samples.filter(sample => sample.status === 'confirmed' && !sample.held_out).length, 'eligible sample')} · ${plural(state.feedback.length, 'saved choice')} · ${plural(activeLanguageLessons().length, 'active language lesson')}`)));
-  return [pageHeading('Writing / voice meets purpose', 'Same you. Different moments.', 'Choose how much help you want, from a light polish to a more considered rewrite.'), state.settings.provider !== 'codex' && el('div', { style: 'margin-bottom: 21px' }, callout('You’re in offline rehearsal', 'This mode uses deterministic text rules. It does not run a language model or demonstrate learned writing quality. Connect the Codex provider to generate adaptive drafts.', 'warning')), el('div', { class: 'write-layout' }, form, output)];
+    output.append(el('div', {class: 'evidence'}, contextPills(ui.draft.context), details('Draft context, sources & limitations', el('div', {}, helper('This is the context captured when this draft was generated. Changing the compose form does not change it.'), evidenceSamples.length ? el('ul', {class: 'evidence-list'}, evidenceSamples.map(sample => el('li', {}, sample.title || 'Untitled sample'))) : helper('No confirmed authored source samples were supplied.'), (ui.draft.warnings || []).map(helper)))));
+  } else output.append(el('div', { class: 'draft-empty' }, icon('feather'), el('h3', {}, 'Write first. Teach as you go.'), el('p', {}, 'Describe a real message on the left. Edit the result naturally. You can ask it to remember a useful correction when one appears.')), el('div', {class: 'evidence'}, helper(`${plural(activeLanguageLessons().length, 'active language lesson')} · ${plural(state.feedback.length, 'saved choice')} · samples optional`)));
+  const right = el('div', {class: 'primary-column'}, output, ui.rememberDraft && correctionRememberPanel());
+  const pieces = [pageHeading('Writing / a useful draft, a considered correction', 'Write it. Make it yours.', 'Use a draft today. Teach a preference only when you have something worth remembering.')];
+  if (state.settings.provider !== 'codex') pieces.push(el('div', {style: 'margin-bottom: 21px'}, callout('Offline rehearsal', 'This mode uses simple text rules, not a language model. Your explicitly saved lessons persist; rehearsal drafts cannot demonstrate improved writing quality.', 'warning')));
+  if (ui.editorStorageError) pieces.push(el('div', {class: 'inline-error'}, 'Browser storage is unavailable. Copy your draft before refreshing or closing this page.'));
+  pieces.push(el('div', {class: 'write-layout'}, form, right), el('p', {class: 'helper local-draft-note'}, 'Drafts, edits, and unsaved memory previews stay in this browser across navigation and refresh. Copying, editing, and adjusting controls never teach a lesson by themselves.'), correctionsHistoryPanel());
+  return pieces;
+}
+function correctionRememberPanel() {
+  const pending = ui.rememberDraft;
+  const span = changedSpan(pending.original_text, pending.revised_text);
+  const takeaway = el('textarea', {rows: 3, maxlength: 2000, value: pending.guidance, placeholder: 'e.g. Use everyday verbs in updates to my team. Prefer “use” over “utilize.”', onInput: event => { pending.guidance = event.target.value; persistEditor(); }});
+  const kind = select([['', 'Choose what changed…'], ['wording', 'Wording'], ['sentence', 'Sentence structure'], ['presentation', 'Presentation'], ['meaning', 'Facts or meaning']], pending.kind, {onChange: event => { pending.kind = event.target.value; pending.dimension = event.target.value === 'wording' ? 'diction' : 'syntax'; persistEditor(); updateScope(); }});
+  const scope = select([['similar', 'Similar messages (recommended)'], ['channel', 'All writing in this context']], pending.scope, {onChange: event => { pending.scope = event.target.value; persistEditor(); updateScope(); }});
+  const scopeSummary = el('p', {class: 'scope-summary', 'aria-live': 'polite'});
+  const context = contextEditor(pending.context, {remember: false, onChange: value => { pending.context = value; persistEditor(); updateScope(); }});
+  const preferred = el('textarea', {rows: 2, class: 'phrase-input', maxlength: 500, value: pending.preferred, placeholder: 'Optional short example to favor', onInput: event => { pending.preferred = event.target.value; persistEditor(); }});
+  const avoided = el('textarea', {rows: 2, class: 'phrase-input', maxlength: 500, value: pending.avoided, placeholder: 'Optional short example to avoid', onInput: event => { pending.avoided = event.target.value; persistEditor(); }});
+  const notice = el('div', {class: 'inline-error', hidden: true});
+  const save = button('Remember this preference', null, 'primary small', 'check'); save.type = 'submit';
+  const updateScope = () => {
+    const facts = pending.kind === 'meaning'; save.disabled = facts;
+    notice.hidden = !facts; notice.textContent = 'Facts and meaning corrections apply only to this draft. Keep your edit; it cannot be saved as a style preference.';
+    scopeSummary.textContent = correctionScopeSummary(pending.context, pending.scope);
+    context.controls.audience.placeholder = pending.scope === 'similar' ? 'Who should this apply to? e.g. my team' : 'Not used for a broad context rule';
+  };
+  const preview = el('div', {class: 'correction-compare'}, el('div', {}, el('div', {class: 'field-label'}, 'Before'), el('div', {class: 'correction-text before'}, span.before || '(nothing)')), el('div', {}, el('div', {class: 'field-label'}, 'Your correction'), el('div', {class: 'correction-text after'}, span.after || '(removed)')));
+  const form = el('form', {class: 'panel', id: 'remember-correction'}, panelHeading('Remember what you meant to teach.', 'Check the change, write the takeaway, and choose where it applies.'), el('div', {class: 'panel-body'}, preview, !span.phraseFits && el('p', {class: 'helper', style: 'margin: 12px 0'}, 'This edit is too long for a short phrase rule. Describe a concise takeaway below; the full original and revised draft will be preserved without truncation.'), field('What did you change?', kind), notice, field('The lesson to remember', takeaway, 'required; 2,000 characters max'), details('Optional short examples', el('div', {class: 'form-row'}, field('Prefer', preferred), field('Avoid', avoided))), field('Use this for', scope), context.node, scopeSummary, helper('Only recipient, purpose, relationship, and stakes define a similar-message match. Situation notes are background context, not an enforced matching filter.')), el('div', {class: 'panel-foot'}, button('Just this message', () => { ui.draft.teaching_baseline = pending.revised_text; ui.draft.teaching_baseline_reason = 'dismissed'; ui.rememberDraft = null; persistEditor(); render(); toast('Kept your edited draft. Nothing was learned.'); }, 'small quiet'), save));
+  updateScope();
+  form.addEventListener('submit', event => { event.preventDefault(); busy(save, async () => {
+    if (!pending.kind) { kind.focus(); throw new Error('Choose what you changed before remembering it.'); }
+    if (pending.kind === 'meaning') throw new Error('Facts and meaning changes cannot be saved as a style lesson.');
+    if (!pending.guidance.trim()) { takeaway.focus(); throw new Error('Write a short takeaway describing what to remember.'); }
+    if (pending.scope === 'similar' && !hasSimilarScope(pending.context)) { context.controls.audience.focus(); throw new Error('Who is this for? Add a recipient to keep the lesson specific, or explicitly choose all writing in this context.'); }
+    const result = await api('/corrections', 'POST', {original_text: pending.original_text, revised_text: pending.revised_text, guidance: pending.guidance.trim(), preferred: pending.preferred.trim(), avoided: pending.avoided.trim(), context: pending.context, scope: pending.scope, dimension: pending.dimension, kind: 'style'});
+    ui.draft.teaching_baseline = pending.revised_text; ui.draft.teaching_baseline_reason = 'remembered'; ui.draft.teaching_correction_id = result.correction.id; ui.rememberDraft = null; ui.lastCorrectionId = result.correction.id; persistEditor(); await refresh(); toast('Preference remembered for the scope you chose. You can undo it below.');
+  }); });
+  return form;
+}
+function undoCorrectionButton(correction, label = 'Undo remembered correction') {
+  const undo = button(label, () => busy(undo, async () => { await api(`/corrections/${encodeURIComponent(correction.id)}/undo`, 'POST', {}); if (ui.draft?.teaching_correction_id === correction.id) { ui.draft.teaching_baseline_reason = 'undone'; persistEditor(); } await refresh(); toast('This remembered correction is no longer used. Your edited draft remains intact.'); }), 'small');
+  return undo;
+}
+function correctionsHistoryPanel() {
+  const corrections = state.corrections || [];
+  const list = el('div', {class: 'panel-body'});
+  if (!corrections.length) list.append(helper('No corrections remembered yet. Edit a draft, then choose “Remember this correction” only when it should shape future writing.'));
+  for (const correction of corrections) {
+    const isActive = correction.status === 'active';
+    const statuses = {active: 'In use', undone: 'Undone', inactive: 'Lesson disabled', lesson_changed: 'Lesson edited separately', lesson_deleted: 'Lesson deleted'};
+    const span = changedSpan(correction.original_text, correction.revised_text);
+    const row = el('article', {class: 'remembered-correction'}, el('div', {class: 'review-top'}, el('h3', {}, correction.guidance), badge(statuses[correction.status] || correction.status, isActive ? '' : 'muted')), helper(correctionScopeSummary(correction.context, correction.scope)), details('Review the saved correction', el('div', {}, el('div', {class: 'correction-compare'}, el('div', {}, el('div', {class: 'field-label'}, 'Before'), el('div', {class: 'correction-text before'}, span.before || '(nothing)')), el('div', {}, el('div', {class: 'field-label'}, 'After'), el('div', {class: 'correction-text after'}, span.after || '(removed)'))), details('Full original and revised drafts', el('div', {}, el('h3', {}, 'Original'), el('pre', {class: 'provenance-text'}, correction.original_text), el('h3', {}, 'Revised'), el('pre', {class: 'provenance-text'}, correction.revised_text))))));
+    if (isActive) row.append(el('div', {class: 'button-group', style: 'margin-top: 12px'}, undoCorrectionButton(correction), button('Check on a new message', () => launchCorrectionCheck(correction), 'small quiet', 'arrow')));
+    else if (correction.status === 'lesson_changed') row.append(helper('The lesson was edited separately. Review it in Voice profile; undo will not overwrite those changes.'));
+    list.append(row);
+  }
+  return el('section', {class: 'panel correction-history'}, panelHeading('What you’ve asked it to remember', 'Review or undo saved corrections here. Your draft edits are separate.', badge(`${corrections.filter(item => item.status === 'active').length} in use`, 'muted')), list);
 }
 function renderProfile() {
   const profile = state.profile || {};
@@ -544,6 +665,83 @@ function priorPanel() {
   return el('section',{class:'panel'},panelHeading('Prior understanding','Bring useful knowledge from another assistant explicitly. Review it before it influences drafts.'),el('div',{class:'panel-body'},list,details('Add a context packet',form),helper('Only confirmed priors in the matching context are used. Hidden conversation history is not imported.')));
 }
 function renderEvaluate() {
+  const summary = state.quality_summary || {};
+  const active = (state.corrections || []).filter(item => item.status === 'active');
+  if (!active.some(item => item.id === ui.qualityForm.correctionId)) {
+    ui.qualityForm.correctionId = active[0]?.id || '';
+    ui.qualityForm.context = active[0] ? {...active[0].context} : {...ui.context};
+  }
+  const selected = active.find(item => item.id === ui.qualityForm.correctionId);
+  const column = el('div', {class: 'primary-column'});
+  for (const item of (state.quality_checks || []).filter(check => check.status === 'unrated')) column.append(qualityCheckPanel(item));
+  if (selected) {
+    const correction = select(active.map(item => [item.id, item.guidance.length > 100 ? `${item.guidance.slice(0, 97)}…` : item.guidance]), selected.id, {onChange: event => {
+      const target = active.find(item => item.id === event.target.value);
+      ui.qualityForm.correctionId = target.id; ui.qualityForm.context = {...target.context}; persistEditor(); render();
+    }});
+    const context = contextEditor(ui.qualityForm.context || selected.context, {remember: false, onChange: value => { ui.qualityForm.context = value; persistEditor(); }});
+    const brief = el('textarea', {required: true, rows: 4, maxlength: 15000, value: ui.qualityForm.brief || '', placeholder: 'Use a new message with the same kind of recipient or purpose. Supply the facts both drafts must preserve; do not paste your previous correction as the answer.', onInput: event => { ui.qualityForm.brief = event.target.value; persistEditor(); }});
+    const submit = button(state.settings.provider === 'codex' ? 'Check this correction blind' : 'Rehearse this correction check', null, 'primary', 'arrow'); submit.type = 'submit';
+    const setup = el('form', {class: 'panel'}, panelHeading('Did this correction actually help?', 'Try it on a new brief. The two drafts differ only in whether this correction is included.'), el('div', {class: 'panel-body'}, field('Remembered correction', correction), helper(selected.guidance), el('p', {class: 'scope-summary'}, correctionScopeSummary(selected.context, selected.scope)), field('A new message to write', brief), context.node), el('div', {class: 'panel-foot'}, helper('Without / with labels stay hidden until you rate both.'), submit));
+    setup.addEventListener('submit', event => { event.preventDefault(); busy(submit, async () => {
+      if (!brief.value.trim()) throw new Error('Give the check a new message and its facts.');
+      const result = await api(`/corrections/${encodeURIComponent(selected.id)}/checks`, 'POST', {context: context.get(), brief: brief.value.trim()});
+      ui.qualityForm.brief = ''; persistEditor(); await refresh(); toast('Blind check ready. Judge meaning and effort for each draft.');
+    }, 'Preparing two drafts…'); });
+    column.append(setup);
+  } else column.append(el('section', {class: 'panel panel-pad'}, el('h2', {}, 'Start with a correction worth remembering.'), helper('Write a real message, edit it, and explicitly remember a style preference. Then check that one correction on a new brief here.'), el('div', {style: 'margin-top: 15px'}, button('Go to your draft', () => navigate('write'), 'primary small', 'write'))));
+  const counts = el('section', {class: 'panel panel-pad'}, el('h2', {}, 'What these checks have shown'), helper(`${summary.rated_real || 0} rated AI checks · ${summary.updated_wins || 0} preferred with correction · ${summary.previous_wins || 0} preferred without · ${summary.ties || 0} ties · ${summary.neither || 0} neither`), helper(`${summary.meaning_issues || 0} checks with meaning concerns · ${summary.rated_offline || 0} rated offline rehearsals excluded from AI results`), el('p', {class: 'helper', style: 'margin-top: 10px'}, 'These judgments apply to the messages checked. A preference win, synthetic scenario, or rehearsal does not prove personal accuracy or general improvement.'));
+  const history = (state.quality_checks || []).filter(item => item.status !== 'unrated');
+  for (const item of history) counts.append(qualityCheckPanel(item, true));
+  column.append(counts);
+  const legacy = renderLegacyEvaluation();
+  column.append(el('section', {class: 'panel panel-pad'}, details('Other evaluations: whole profile vs baseline', el('div', {class: 'legacy-evaluation'}, helper('These older whole-profile comparisons use separate records and counts. They are not correction checks.'), legacy))));
+  return [pageHeading('Check fit / one correction at a time', 'Keep the changes that help.', 'Compare a saved correction on a new message. Judge which needs less work and whether both preserve the meaning.'), state.settings.provider !== 'codex' && el('div', {style: 'margin-bottom: 20px'}, callout('Offline checks are rehearsals', 'Both versions use deterministic rules. Ratings are kept separately and do not count as evidence that an AI model improved.', 'warning')), column];
+}
+function qualityCheckPanel(item, nested = false) {
+  const rated = item.status !== 'unrated';
+  const correction = (state.corrections || []).find(value => value.id === item.correction_id);
+  const draft = ui.qualityVotes[item.id] || {choice: '', meaning: {a: '', b: ''}, effort: {a: '', b: ''}, notes: ''};
+  ui.qualityVotes[item.id] = draft;
+  const chooseButtons = [];
+  const submit = button('Save judgment & reveal labels', null, 'primary small'); submit.type = 'submit';
+  const updateChoice = value => { draft.choice = value; chooseButtons.forEach(([key, target]) => { target.classList.toggle('selected', key === value); target.setAttribute('aria-pressed', String(key === value)); }); persistEditor(); };
+  const options = el('div', {class: 'quality-options'});
+  for (const option of item.options || []) {
+    const id = option.id;
+    const label = rated ? (item.mapping?.[id] === 'updated' ? 'With this correction' : 'Without this correction') : 'Identity hidden';
+    const choose = button(`Prefer ${id.toUpperCase()}`, () => updateChoice(id), `small ${draft.choice === id ? 'selected' : ''}`); choose.setAttribute('aria-pressed', String(draft.choice === id)); chooseButtons.push([id, choose]);
+    const body = el('div', {class: 'quality-option'}, el('div', {class: 'review-top'}, el('span', {class: 'option-letter'}, id.toUpperCase()), badge(label, 'muted')), el('div', {class: 'option-text quality-text'}, option.text));
+    if (rated) body.append(el('div', {class: 'quality-rating-summary'}, helper(`Meaning: ${item.meaning?.[id] || 'not recorded'}`), helper(`Editing effort: ${item.effort?.[id] || 'not recorded'}`)));
+    else {
+      const meaning = select([['', 'Choose…'], ['preserved', 'Meaning preserved'], ['changed', 'Meaning changed'], ['unsure', 'I’m not sure']], draft.meaning[id], {required: true, onChange: event => { draft.meaning[id] = event.target.value; persistEditor(); }});
+      const effort = select([['', 'Choose…'], ['none', 'Ready as written'], ['light', 'Light edits'], ['substantial', 'Substantial edits']], draft.effort[id], {required: true, onChange: event => { draft.effort[id] = event.target.value; persistEditor(); }});
+      body.append(el('div', {class: 'quality-rating-fields'}, field(`Does ${id.toUpperCase()} keep the meaning?`, meaning), field(`How much work does ${id.toUpperCase()} need?`, effort), choose));
+    }
+    options.append(body);
+  }
+  const body = el('div', {class: nested ? '' : 'panel-body'}, correction && el('p', {class: 'helper'}, `Testing: ${correction.guidance}`), contextPills(item.context), el('p', {class: 'quality-brief'}, item.brief), options);
+  if (item.warnings?.length) body.append(details('Provider notes', el('div', {}, item.warnings.map(helper))));
+  if (rated) {
+    const result = {updated: 'Preferred with this correction', previous: 'Preferred without this correction', tie: 'Both fit equally', neither: 'Neither fit'}[item.result] || item.result;
+    body.append(el('p', {class: 'quality-result'}, result), item.notes && helper(item.notes), correction?.status === 'active' && undoCorrectionButton(correction, 'Undo this correction'));
+    return el('article', {class: nested ? 'rated-quality-check' : 'panel'}, body);
+  }
+  const alternatives = el('div', {class: 'button-group', role: 'group', 'aria-label': 'Overall preference'});
+  for (const [value, label] of [['tie', 'Both fit equally'], ['neither', 'Neither fits']]) { const control = button(label, () => updateChoice(value), `small ${draft.choice === value ? 'selected' : ''}`); control.setAttribute('aria-pressed', String(draft.choice === value)); chooseButtons.push([value, control]); alternatives.append(control); }
+  const notes = el('textarea', {rows: 2, maxlength: 2000, value: draft.notes, placeholder: 'What helped, hurt, or changed the meaning?', onInput: event => { draft.notes = event.target.value; persistEditor(); }});
+  body.append(alternatives, el('div', {style: 'margin-top: 16px'}, field('A note about your judgment', notes, 'optional')));
+  const form = el('form', {class: 'panel'}, panelHeading('Which version would you use?', 'Rate the meaning and editing effort of both, then choose a version, tie, or neither.', badge(item.provider === 'codex' ? 'Blind AI check' : 'Offline rehearsal', item.provider === 'codex' ? '' : 'amber')), body, el('div', {class: 'panel-foot'}, helper('These ratings evaluate the correction. They do not train new preferences.'), submit));
+  form.addEventListener('submit', event => { event.preventDefault(); busy(submit, async () => {
+    if (!draft.choice) throw new Error('Choose A, B, both, or neither.');
+    if (!draft.meaning.a || !draft.meaning.b || !draft.effort.a || !draft.effort.b) throw new Error('Rate meaning and editing effort for both A and B.');
+    await api(`/quality-checks/${encodeURIComponent(item.id)}/rate`, 'POST', {choice: draft.choice, meaning: draft.meaning, effort: draft.effort, notes: draft.notes.trim()});
+    delete ui.qualityVotes[item.id]; persistEditor(); await refresh(); toast('Judgment saved. Without / with labels are now revealed.');
+  }); });
+  return form;
+}
+
+function renderLegacyEvaluation() {
   const summary=state.evaluation_summary || {};
   const context=contextEditor(ui.context,{scenario:true});
   const brief=el('textarea',{required:true,maxlength:15000,rows:4,placeholder:'Give both versions the same facts and desired outcome. Do not paste held-out answer text.', 'aria-label':'Comparison brief'});
