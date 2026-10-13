@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Voicework \u2014 Writing capture & Drive discovery",
+  "version": "0.2.0",
+  "description": "Choose visible Google Docs or a writing excerpt, export reviewed text, and confirm authorship in your local Voicework inbox.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "contextMenus",
+    "storage"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Capture for Voicework"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "optional_host_permissions": [
+    "https://docs.google.com/*"
+  ]
+}

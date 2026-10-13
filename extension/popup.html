@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Voicework browser capture</title><link rel="stylesheet" href="popup.css"></head>
+<body><header><span class="mark">v.</span><div><h1>Bring your writing.</h1><p>Choose sources. Review authorship in Voicework.</p></div></header>
+<nav aria-label="Capture mode"><button id="show-sample" class="tab active" aria-pressed="true">One excerpt</button><button id="show-discovery" class="tab" aria-pressed="false">From Drive</button></nav>
+<section id="sample-panel">
+<p class="notice">Read the current tab’s selection when you choose. A source is never proof of authorship.</p>
+<button id="capture" type="button">Read selected text from this tab</button>
+<label>Title<input id="title" maxlength="200" placeholder="A reply, note, or document"></label>
+<label>Source URL<input id="url" readonly></label>
+<label>Writing excerpt<textarea id="text" rows="7" maxlength="30000" placeholder="Select text on a page, or paste an excerpt. Google Docs canvas selections may require copying manually."></textarea></label>
+<div class="fields"><label>Context<select id="channel"><option value="work">Work</option><option value="personal">Personal</option><option value="public">Public</option></select></label><label>Audience<input id="audience" maxlength="200" placeholder="e.g. a close friend"></label></div>
+<label>What was happening?<textarea id="scenario" rows="2" maxlength="2000" placeholder="The request, relationship, or purpose behind the writing"></textarea></label>
+<p id="status" role="status" aria-live="polite"></p>
+<button id="export" class="primary" type="button">Download sample for review</button>
+</section>
+<section id="discovery-panel" hidden>
+<p class="notice">Discover Google Docs from the current Drive tab’s visible list, or add the current Google Doc. Drive loads rows as you scroll: this is never your entire Drive.</p>
+<button id="discover" type="button">Discover from current Drive / Docs tab</button>
+<p id="discovery-summary" class="small">Open the folder, list, or document you want to use, then discover.</p>
+<div id="candidate-list" class="candidate-list" aria-label="Discovered document candidates"></div>
+<div id="batch-controls" hidden>
+<div class="fields"><label>Batch context<select id="batch-channel"><option value="work">Work</option><option value="personal">Personal</option><option value="public">Public</option></select></label><label>Audience<input id="batch-audience" maxlength="200" placeholder="Optional; editable later"></label></div>
+<label>Situation / purpose<textarea id="batch-scenario" rows="2" maxlength="2000" placeholder="Optional. Otherwise each document title is a provisional hint."></textarea></label>
+<p class="small">Select up to 20. Text retrieval requests optional access to docs.google.com and uses your existing signed-in session. Browser authentication and document sharing rules still apply. No passwords, tokens, cookies API, or browser history are read.</p>
+<button id="fetch-documents" class="primary" type="button">Allow Docs access & collect selected text</button>
+<p class="small">Export redirects may require manual download. Each candidate has an Open document / TXT option; downloaded TXT can be attached below. No automatic access to other Google content domains.</p>
+<div class="actions"><button id="download-batch" type="button" disabled>Download collected samples</button><button id="clear-discovery" class="quiet" type="button">Clear discovery</button></div>
+</div>
+<p id="discovery-status" role="status" aria-live="polite"></p>
+<button id="forget-access" class="quiet" type="button">Remove optional Docs access</button>
+</section>
+<p class="small footer">Import the JSON in Voicework → Samples. Every item is pending review. This extension does not connect to localhost or confirm authorship.</p>
+<script type="module" src="popup.js"></script></body></html>

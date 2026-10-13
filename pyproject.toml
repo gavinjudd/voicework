@@ -1,0 +1,9 @@
+[project]
+name = "voicework"
+version = "0.1.0"
+description = "Context-specific personal writing and presentation calibration"
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
