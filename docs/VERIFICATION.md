@@ -1,5 +1,15 @@
 # Verification — 2026-10-13
 
+## Claude provider (no Codex, no API key) — 2026-10-14
+
+- `python3 scripts/verify_harness_live.py --provider claude` ran live on the development Mac through the Claude Code CLI 2.1.300 with the user's Claude subscription login, model `claude-opus-5-5`, in safe mode with no tools. All three synthetic cases passed every hard check (protected structure unchanged, no numeric/link/citation invariant errors, semantic review complete, voice guidance retained):
+  - personal (174 chars): lesson applied ("u", casual register); every fact kept; review flagged one added "!" and a negation-wording change.
+  - professional (447 chars): "Can you review…" per the lesson; review flagged three subtle meaning shifts in its own draft ("most important parts" vs "especially", an unclear "it", an added "only").
+  - long document (31,289 → 31,449 chars): 3 generation and 3 review batches in 134 s; review reported only warnings (actor attribution "I deliberately limited", "only then" emphasis, scenario names read as objects, cross-section phrasing drift).
+- Statuses were `review_required` because of warnings, never errors. These are source-relative integration observations on synthetic fixtures, not ratings of the user's voice.
+- Setup issues hit along the way, now reported by name: an expired Claude Code sign-in (fix: `claude auth login`) and CLI 2.1.266 being too old for the model (fix: `claude update`; 2.1.280+ required). `scripts/diagnose_claude.py` isolates such failures with a synthetic prompt.
+- A separate held-out check on four of the user's real messages (through MCP, model judges, private record in ignored `work/voice-fit-20261014/`) found guidance helps directionally (unguided drafts never ranked first in 8 judgments) but strict context matching gave two of four real situations no guidance at all.
+
 ## Document harness — current verification
 
 - **195 Python tests and 41 JavaScript tests passed (236 total)**, plus Python compilation, app JavaScript syntax and `git diff --check`. Python integration tests bind isolated loopback servers and use temporary databases.

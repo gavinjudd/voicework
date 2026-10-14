@@ -6,6 +6,7 @@ the app database, and does not rate or claim the user's personal voice fidelity.
 import argparse
 import json
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -39,16 +40,26 @@ def cases():
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--codex-bin', required=True)
-    parser.add_argument('--output-dir', default='work/harness-verification-20261013/live')
+    parser = argparse.ArgumentParser(description='Live synthetic integration check for a Voicework provider')
+    parser.add_argument('--provider', choices=('claude', 'codex', 'anthropic'), default='codex')
+    parser.add_argument('--model', help='Default: the provider default (claude-opus-5-5 or gpt-6-astra)')
+    parser.add_argument('--codex-bin', help='Codex executable (codex provider)')
+    parser.add_argument('--claude-bin', help='Claude Code executable (claude provider)')
+    parser.add_argument('--output-dir', default=None, help='Default: work/live-verification-<provider>')
+    parser.add_argument('--case', action='append', choices=('personal', 'professional', 'long_document'),
+                        help='Run only this case (repeatable). The long document takes several minutes.')
     args = parser.parse_args()
+    if args.output_dir is None:
+        args.output_dir = 'work/live-verification-' + args.provider
+    executable = args.claude_bin if args.provider == 'claude' else args.codex_bin
     folder = Path(args.output_dir)
     folder.mkdir(parents=True, exist_ok=True)
 
     def run(case):
         name, context, source, controls, lessons = case
-        provider = Provider('codex', model='gpt-6-astra', timeout=360, executable=args.codex_bin)
+        started = time.time()
+        print('[%s] starting %s (%d chars)...' % (time.strftime('%H:%M:%S'), name, len(source)), file=sys.stderr, flush=True)
+        provider = Provider(args.provider, model=args.model, timeout=600, executable=executable)
         result = provider.generate_document(context, source, controls, [], lessons)
         protected = lambda text: [(b['kind'], b['text']) for b in parse_document(text)[0] if b['kind'] not in ('prose', 'spacing')]
         assert protected(source) == protected(result['text']), 'Protected structure changed'
@@ -60,11 +71,14 @@ def main():
                    'generation_batches': result['generation_batches'], 'review': result['checks']['review'],
                    'status': result['checks']['status'], 'content_issues': result['checks']['content']['issues'],
                    'voice_issues': result['checks']['voice']['issues']}
+        summary['seconds'] = round(time.time() - started)
+        print('[%s] finished %s in %ss' % (time.strftime('%H:%M:%S'), name, summary['seconds']), file=sys.stderr, flush=True)
         print(json.dumps(summary), flush=True)
         return summary
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        summaries = list(pool.map(run, cases()))
+        selected = [case for case in cases() if not args.case or case[0] in args.case]
+        summaries = list(pool.map(run, selected))
     (folder / 'summary.json').write_text(json.dumps(summaries, indent=2), encoding='utf-8')
 
 

@@ -4,7 +4,7 @@ Consumes public records only. The summary exposes counts and context coverage,
 not sample text, generated options, or a blinded candidate's mapping.
 """
 from .learning import CONTEXT_FIELDS
-from .provider import LIVE_PROVIDERS
+from .live import LIVE_PROVIDERS
 
 
 def _normalize(value):

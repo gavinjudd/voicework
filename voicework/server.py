@@ -27,6 +27,7 @@ from .confidence import build_voice_confidence
 from .document_jobs import DocumentJobs
 from .documents import MAX_DOCUMENT_CHARS, MAX_OUTPUT_CHARS, validate_document_text
 from .routing import resolve_context
+from .live import LIVE_PROVIDERS
 
 MAX_BODY_BYTES = 8 * 1024 * 1024
 
@@ -319,7 +320,7 @@ class Handler(BaseHTTPRequestHandler):
                 "priors": self.server.priors.list(), "evaluations": evaluations,
                 "evaluation_summary": self.server.evaluations.summary(), "discovery_jobs": self.server.discovery_jobs.list(),
                 "settings": {"provider": getattr(provider, "mode", "offline"), "model": getattr(provider, "model", None),
-                             "provider_label": getattr(provider, "label", None), "live": getattr(provider, "mode", "offline") in ("codex", "anthropic")},
+                             "provider_label": getattr(provider, "label", None), "live": getattr(provider, "mode", "offline") in LIVE_PROVIDERS},
                 "stats": {"pending": sum(s["status"] == "pending" for s in samples),
                           "confirmed": sum(s["status"] == "confirmed" for s in samples), "rounds": len(rounds)},
                 "capabilities": {"codex_available": getattr(provider, "mode", None) == "codex" and bool(provider.available()),

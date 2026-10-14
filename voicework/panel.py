@@ -313,9 +313,10 @@ def main(argv=None):
     sub.add_parser("list", help="List panels")
     run = sub.add_parser("run", help="Generate blind comparisons for every item")
     run.add_argument("name")
-    run.add_argument("--provider", choices=("codex", "anthropic", "offline"), default=None)
+    run.add_argument("--provider", choices=("claude", "codex", "anthropic", "offline"), default=None)
     run.add_argument("--model")
     run.add_argument("--codex-bin")
+    run.add_argument("--claude-bin")
     run.add_argument("--label")
     run.add_argument("--resume", action="store_true")
     report = sub.add_parser("report", help="Per-run, per-channel outcomes")
@@ -338,9 +339,9 @@ def main(argv=None):
                 print("%s  items=%d runs=%d  created %s" % (item["name"], item["items"], item["runs"], item["created_at"][:10]))
         elif args.command == "run":
             if not args.provider:
-                raise ValueError("Choose --provider codex or anthropic (offline creates rehearsal cases only)")
+                raise ValueError("Choose --provider claude, codex or anthropic (offline creates rehearsal cases only)")
             from .provider import Provider
-            provider = Provider(mode=args.provider, model=args.model, executable=args.codex_bin)
+            provider = Provider(mode=args.provider, model=args.model, executable=args.claude_bin if args.provider == "claude" else args.codex_bin)
             run_panel(path, args.name, provider, args.label, args.resume)
         else:
             result = panels.report(args.name)

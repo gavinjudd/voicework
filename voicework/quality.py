@@ -20,6 +20,7 @@ from .learning import contextual_preferences, retrieve, validate_context
 from .matching import same_channel
 from .store import text_field
 from .migrations import allow_live_provider
+from .live import LIVE_PROVIDERS, PROVIDER_MODES
 
 
 VARIANTS = ("previous", "updated")
@@ -92,7 +93,7 @@ class QualityStore:
             conn.execute("""CREATE TABLE IF NOT EXISTS quality_cases (
                 id TEXT PRIMARY KEY, correction_id TEXT NOT NULL,
                 context TEXT NOT NULL, brief TEXT NOT NULL, options TEXT NOT NULL,
-                provider TEXT NOT NULL CHECK(provider IN ('offline','codex','anthropic')),
+                provider TEXT NOT NULL CHECK(provider IN ('offline','codex','anthropic','claude')),
                 model TEXT NOT NULL, controls TEXT NOT NULL, provenance TEXT NOT NULL,
                 mapping TEXT NOT NULL, generation_order TEXT NOT NULL,
                 provider_warnings TEXT NOT NULL,
@@ -171,8 +172,8 @@ class QualityStore:
         # Keep only the lesson's defined fields, never a correction's source text.
         target = {**{key: target[key] for key in LESSON_FIELDS}, "enabled": True, "is_language_lesson": True}
         mode = getattr(provider, "mode", None)
-        if mode not in {"offline", "codex", "anthropic"}:
-            raise ValueError("Quality checks require an explicit offline, codex or anthropic provider")
+        if mode not in PROVIDER_MODES:
+            raise ValueError("Quality checks require an explicit offline or live (claude, codex, anthropic) provider")
         model = text_field(getattr(provider, "model", "") or "", "model", 200)
         for label, records in (("evidence", evidence), ("common preferences", common_preferences)):
             if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
@@ -256,7 +257,7 @@ class QualityStore:
                 if row["provider"] == "offline":
                     target["offline_count"] += 1
                     target["rated_offline"] += row["status"] == "rated"
-                elif row["provider"] in ("codex", "anthropic") and row["status"] == "rated":
+                elif row["provider"] in LIVE_PROVIDERS and row["status"] == "rated":
                     mapping = json.loads(row["mapping"])
                     meaning, effort = json.loads(row["meaning"]), json.loads(row["effort"])
                     result = mapping.get(row["choice"], row["choice"])

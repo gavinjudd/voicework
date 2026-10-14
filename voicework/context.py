@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .learning import CONTEXT_FIELDS, validate_context
 from .store import text_field
+from .live import LIVE_PROVIDERS
 
 AUTHORSHIP_NOTICE = "Authorship is unverified. Applying context does not confirm that you wrote this."
 
@@ -51,7 +52,7 @@ def infer_context(sample, provider):
     """Analyze only the user-selected sample; return a preview with no writes."""
     if getattr(provider, "mode", None) == "offline":
         return _infer_offline(analysis_input(sample))
-    if getattr(provider, "mode", None) not in ("codex", "anthropic"):
+    if getattr(provider, "mode", None) not in LIVE_PROVIDERS:
         raise ValueError("Unknown context analysis provider")
     return provider.infer_context(sample)
 

@@ -38,6 +38,14 @@ python3 -m voicework --provider offline
 
 Offline mode is explicitly labeled **rehearsal**. It persists lessons, review and calibration feedback, but uses simple text transformations and fixed comparison contrasts instead of an AI. It does not semantically apply language lessons or demonstrate personalized writing quality. There is no silent fallback from Codex to offline.
 
+### Claude provider (your Claude Code login, no API key)
+
+```sh
+python3 -m voicework --provider claude                 # default model claude-opus-5-5; change with --model
+```
+
+Generation runs `claude -p` with your existing Claude Code sign-in. Each call is locked down: `--safe-mode` (no CLAUDE.md, memory, hooks, plugins, skills or MCP servers), `--tools ""` (no built-in tools), `--no-session-persistence`, the prompt on stdin, an empty temporary working directory, and `--json-schema` with the same strict schema the other providers use. Failures are classified (not signed in, usage limit, model unavailable, schema) without echoing the CLI's output. Select the executable with `--claude-bin` or `VOICEWORK_CLAUDE_BIN`. If `ANTHROPIC_API_KEY` is set in that environment, Claude Code may bill the key instead of your subscription. Check it live with `python3 scripts/verify_harness_live.py --provider claude`.
+
 ### Anthropic API provider
 
 As an alternative to the Codex CLI, generate through the Anthropic Messages API:

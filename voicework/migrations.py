@@ -1,17 +1,20 @@
 """Small, data-preserving SQLite schema migrations."""
 import re
 
-OLD_CHECK = "CHECK(provider IN ('offline','codex'))"
-NEW_CHECK = "CHECK(provider IN ('offline','codex','anthropic'))"
+from .live import PROVIDER_MODES, provider_check_sql
+
+_CHECK = re.compile(r"CHECK\(provider IN \(([^)]*)\)\)")
+NEW_CHECK = provider_check_sql()
 
 
 def allow_live_provider(conn, table):
-    """Widen a provider CHECK constraint so Anthropic-generated records can be stored.
+    """Widen a provider CHECK constraint so every current provider can be stored.
 
-    SQLite cannot alter a CHECK constraint, so the table is rebuilt in one
-    BEGIN IMMEDIATE write transaction (committed by the caller's ``with conn``)
-    with identical columns and rows. Existing records keep
-    their original provider labels. Runs once; later calls are no-ops.
+    Handles any older list (codex only, or codex+anthropic). SQLite cannot alter a
+    CHECK constraint, so the table is rebuilt in one BEGIN IMMEDIATE write
+    transaction (committed by the caller's ``with conn``) with identical columns
+    and rows. Existing records keep their original provider labels. Later calls
+    are no-ops.
     """
     if not re.fullmatch(r"[a-z_]+", table):
         raise ValueError("Invalid table name")
@@ -20,7 +23,13 @@ def allow_live_provider(conn, table):
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
-    if row is None or OLD_CHECK not in row[0]:
+    if row is None:
+        return False
+    found = _CHECK.search(row[0])
+    if found is None:
+        return False
+    current = {item.strip().strip("'") for item in found.group(1).split(",")}
+    if set(PROVIDER_MODES) <= current:
         return False
     extras = conn.execute("SELECT name FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL", (table,)).fetchall()
     if extras:
@@ -28,7 +37,8 @@ def allow_live_provider(conn, table):
     before = conn.execute("SELECT COUNT(*) FROM %s" % table).fetchone()[0]
     temporary = table + "_migrating"
     conn.execute("DROP TABLE IF EXISTS %s" % temporary)
-    create, count = re.subn(r'^CREATE TABLE\s+(?:"%s"|%s\b)' % (table, table), "CREATE TABLE %s" % temporary, row[0].replace(OLD_CHECK, NEW_CHECK), count=1)
+    widened = row[0][:found.start()] + NEW_CHECK + row[0][found.end():]
+    create, count = re.subn(r'^CREATE TABLE\s+(?:"%s"|%s\b)' % (table, table), "CREATE TABLE %s" % temporary, widened, count=1)
     if count != 1:
         raise RuntimeError("Unexpected schema for %s; refusing to migrate automatically" % table)
     conn.execute(create)

@@ -10,6 +10,7 @@ import json
 import math
 import re
 from collections import Counter
+from .live import LIVE_PROVIDERS
 
 
 MAX_DOCUMENT_CHARS = 120000
@@ -414,7 +415,7 @@ def review_document(provider, source, draft, frozen):
     voice_issues, warnings = [], []
     has_voice = any(frozen.get(key) for key in ('authored_examples', 'calibration_feedback', 'language_lessons', 'assistant_derived_priors'))
     review = {'provider': provider.mode, 'status': 'not_checked', 'units_total': 0, 'units_completed': 0}
-    if provider.mode in ('codex', 'anthropic'):
+    if provider.mode in LIVE_PROVIDERS:
         try:
             batches = _review_units(source, draft)
             review['units_total'] = len(batches)
@@ -460,7 +461,7 @@ def generate_document(provider, context, source, controls, payload, offline_warn
     replacements, warnings = {}, []
     if provider.mode == 'offline':
         text = source
-        warnings = [offline_warning, 'Whole-document offline rehearsal preserves the complete source unchanged. Rewriting and semantic voice/content review require a live provider (Codex or Anthropic).']
+        warnings = [offline_warning, 'Whole-document offline rehearsal preserves the complete source unchanged. Rewriting and semantic voice/content review require a live provider (Claude, Codex or Anthropic).']
     else:
         block_positions = {block['id']: index for index, block in enumerate(blocks)}
         # Outline/excerpts are explicitly bounded context, never substitutions
@@ -511,6 +512,6 @@ def generate_document(provider, context, source, controls, payload, offline_warn
     warnings.extend(checks['warnings'])
     warnings.append(REVIEW_LIMITATION)
     return {'text': text, 'provider': provider.mode,
-            'evidence_ids': [item['id'] for item in frozen.get('authored_examples', [])] if provider.mode in ('codex', 'anthropic') else [],
+            'evidence_ids': [item['id'] for item in frozen.get('authored_examples', [])] if provider.mode in LIVE_PROVIDERS else [],
             'warnings': list(dict.fromkeys(warnings)), 'checks': checks, 'sections': sections,
-            'generation_batches': len(batches) if provider.mode in ('codex', 'anthropic') else 0}
+            'generation_batches': len(batches) if provider.mode in LIVE_PROVIDERS else 0}
