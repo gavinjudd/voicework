@@ -26,6 +26,7 @@ ALIAS_GROUPS = {
     # These describe one writing format. Explicit short, informal, private,
     # academic, marketing, and other qualified formats do not join this family.
     "channel": (
+        ("long-form writing", "long form writing", "longform writing"),
         ("technical article", "long-form technical article", "long form technical article",
          "technical research article", "technical explainer"),
         ("personal text message", "personal text", "personal sms"),
@@ -71,6 +72,15 @@ _TECHNICAL_EXPLANATION = re.compile(
 # These remain literal labels for lesson conditions, not blank wildcards. In
 # retrieval they are missing information, so cannot establish relevance.
 _UNINFORMATIVE = {"", "unknown", "unspecified", "not specified", "unclear", "n/a", "unconfirmed"}
+
+# An explicitly broad lesson can apply to these nonfiction formats. This is
+# one-way inheritance for lessons only, not equivalence between their samples,
+# feedback, priors, or more specific lessons. Qualified/unknown labels abstain.
+LONGFORM_LESSON_CHANNELS = frozenset({
+    "long-form writing", "technical article", "article", "long-form article",
+    "essay", "long-form essay", "reflective essay", "project article",
+    "project case study", "case study", "blog post", "long-form blog post",
+})
 _WEIGHTS = {"audience": 5, "intent": 5, "relationship": 4, "stakes": 2}
 _HARD_FIELDS = {"audience", "relationship", "stakes"}
 
@@ -127,6 +137,13 @@ def same_channel(left_context, right_context):
     return left not in _UNINFORMATIVE and right not in _UNINFORMATIVE and left == right
 
 
+def inherits_longform_lesson(declared, requested):
+    """Only an explicitly broad writing lesson may cross format boundaries."""
+    return (normalize_label("channel", declared.get("channel")) == "long-form writing"
+            and normalize_label("channel", requested.get("channel")) in LONGFORM_LESSON_CHANNELS
+            and not same_channel(declared, requested))
+
+
 def _label_explanation(field, actual, requested):
     found = actual.get(field, "work" if field == "channel" else "")
     wanted = requested.get(field, "work" if field == "channel" else "")
@@ -145,10 +162,18 @@ def explain_lesson_context_match(declared, requested):
     if normalize_label("channel", requested.get("channel", "work")) in _UNINFORMATIVE:
         result.update(reason="unknown_channel", conflicting_fields=["channel"])
         return result
-    if not same_channel(declared, requested):
+    inherited = inherits_longform_lesson(declared, requested)
+    if not same_channel(declared, requested) and not inherited:
         result.update(reason="channel_mismatch", conflicting_fields=["channel"])
         return result
     for field in ("channel",) + CONDITION_FIELDS:
+        if field == "channel" and inherited:
+            result["matched_fields"].append(field)
+            result["alias_matches"].append({"field": field, "actual": declared.get(field),
+                                            "requested": requested.get(field),
+                                            "canonical": "long-form writing",
+                                            "reason": "explicit_longform_lesson_scope"})
+            continue
         if field != "channel" and not _literal(declared.get(field)):
             continue
         if normalize_label(field, declared.get(field, "work" if field == "channel" else ""), declared) != normalize_label(field, requested.get(field, "work" if field == "channel" else ""), requested):

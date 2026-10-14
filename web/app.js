@@ -207,7 +207,7 @@ function contextEditor(seed = ui.context, options = {}) {
   const contextId = uid('contexts');
   const channel = controls.channel = input({ value: values.channel, list: contextId, maxlength: 200, placeholder: 'work, personal, community…' });
   const audience = controls.audience = input({ value: values.audience, maxlength: 200, placeholder: 'A teammate, close friend…' });
-  const wrap = el('div', { class: 'context-editor' }, el('div', { class: 'form-row' }, field('Context', channel), field('Who is this for?', audience, 'optional')), el('datalist', { id: contextId }, ['work', 'personal', 'community', 'public writing'].map(value => el('option', { value }))));
+  const wrap = el('div', { class: 'context-editor' }, el('div', { class: 'form-row' }, field('Context', channel), field('Who is this for?', audience, 'optional')), el('datalist', { id: contextId }, ['work', 'personal', 'community', 'public writing', 'long-form writing', 'technical article', 'reflective essay', 'project case study'].map(value => el('option', { value }))));
   const more = el('div', {}, el('div', { class: 'form-row' },
     field('What should it achieve?', controls.intent = input({ value: values.intent, maxlength: 200, placeholder: 'Ask for a decision, reconnect…' })),
     field('Relationship', controls.relationship = input({ value: values.relationship, maxlength: 200, placeholder: 'Peer, manager, close friend…' }))),

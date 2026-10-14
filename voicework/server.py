@@ -253,7 +253,8 @@ class Handler(BaseHTTPRequestHandler):
         available = ([item for item in lessons if item.get("enabled")]
                      + [item for item in samples if item.get("status") == "confirmed" and not item.get("held_out")]
                      + feedback + self.server.priors.list(confirmed_only=True))
-        report = resolve_context(context, [item.get("context", {}) for item in available])
+        report = resolve_context(context, [item.get("context", {}) for item in available],
+                                 lesson_contexts=[item.get("context", {}) for item in lessons if item.get("enabled")])
         context = report["context"]
         evidence = retrieve(samples, context)
         preferences = contextual_preferences(feedback, context) + self._prior_preferences(context) + self._language_preferences(context)

@@ -6,10 +6,11 @@ from a writing sample, or chooses a saved context on the user's behalf.
 """
 from .learning import CONTEXT_FIELDS, validate_context
 from .matching import (CONDITION_FIELDS, explain_context_match,
-                       explain_lesson_context_match, normalize_label, same_channel)
+                       explain_lesson_context_match, inherits_longform_lesson,
+                       normalize_label, same_channel)
 
 
-def resolve_context(context, available_contexts=(), text=""):
+def resolve_context(context, available_contexts=(), text="", lesson_contexts=()):
     """Return the requested context and bounded, explainable routing metadata.
 
     ``available_contexts`` contains context dictionaries, not raw samples.
@@ -37,10 +38,20 @@ def resolve_context(context, available_contexts=(), text=""):
             seen.add(key)
             available.append(normalized)
     same = [item for item in available if same_channel(item, requested)]
-    other = [item for item in available if not same_channel(item, requested)]
-    for item in (same + other)[:12]:
+    lesson_contexts = [validate_context(item) for item in lesson_contexts]
+    broad = [item for item in available if item in lesson_contexts and inherits_longform_lesson(item, requested)
+             and explain_lesson_context_match(item, requested)["eligible"]]
+    other = [item for item in available if item not in same and item not in broad]
+    for item in (same + broad + other)[:12]:
         result["candidates"].append({"context": dict(item),
-                                     "reason": "matching_channel" if same_channel(item, requested) else "available_channel"})
+                                     "reason": "matching_channel" if same_channel(item, requested) else
+                                     "longform_lesson_scope" if item in broad else "available_channel"})
+
+    if broad:
+        result["matches"].append({"field": "channel", "requested": requested["channel"],
+                                  "canonical": "long-form writing",
+                                  "available_labels": sorted({item["channel"] for item in broad}),
+                                  "reason": "explicit_longform_lesson_scope"})
 
     for field in ("channel",) + CONDITION_FIELDS:
         literal = " ".join(requested[field].casefold().split())
@@ -56,9 +67,9 @@ def resolve_context(context, available_contexts=(), text=""):
     channel = matching_context["channel"]
     if channel in {"unknown", "unspecified", "not specified", "unclear", "n/a", "unconfirmed"}:
         result["warnings"].append("Channel is unknown; no saved context or guidance is selected automatically. Choose an explicit channel.")
-    elif available and not same:
+    elif available and not same and not broad:
         result["warnings"].append("No saved context has an equivalent channel. Your explicit channel is retained; available contexts require your selection.")
-    elif same and not any(explain_lesson_context_match(item, requested)["eligible"] or
+    elif same and not broad and not any(explain_lesson_context_match(item, requested)["eligible"] or
                           explain_context_match(item, requested)["eligible"] for item in same):
         result["warnings"].append("No available context matches the supplied conditions. No audience, relationship, stakes, or intent condition was relaxed.")
     if not available:
