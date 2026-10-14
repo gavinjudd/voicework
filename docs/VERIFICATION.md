@@ -39,14 +39,14 @@
 - Voice confidence adds 20 Python and seven JavaScript tests covering authored-evidence exclusions and deduplication, direct teaching without samples, cumulative readiness checkpoints, distinct-context coverage, unfavorable outcomes, blinded-result isolation, offline exclusion, separate correction checks, undo, and unavailable/malformed display data. Readiness does not modify the profile or invoke the model.
 - Live browser verification found the confidence panel on Practice, Samples, and Voice profile; its expanded details matched the API, and Check fit opened and focused the whole-profile blind comparison. Mobile Profile and Samples had no horizontal overflow at 390 × 844px. The browser reported no warnings or errors; the viewport override was reset. A private screenshot was saved outside the repository. A zero-state boolean rendering issue and singular lesson label were fixed and rechecked.
 
-## Not established
-
-### Long-form lesson inheritance (2026-10-13)
+## Long-form lesson inheritance (2026-10-13)
 
 - 201 Python tests and 41 JavaScript tests passed. New synthetic cases cover one-way lesson inheritance, strict remaining context conditions, disabled/undone lessons, unchanged authored-example/feedback/prior selection, routing explanations, and specific-preference/register priority.
 - Live loopback routing retrieved explicitly broad lessons for generic long-form writing, technical articles, reflective essays and project case studies. Personal messages, work emails and unsupported academic-paper labels did not receive those lessons. Previously stored specific lessons were preserved.
 - A fresh fictional case study ran through Codex/Astra with the saved broad lessons. The model content and voice review completed, with no model-reported issues; deterministic checks retained a `negation_changed` warning for equivalent negative contractions. Manual comparison found the negative claims and uncertainty unchanged; numeric tokens, headings and the inline code identifier matched exactly. The reported check status remains `review_required`, and this smoke check is not a user voice rating or accuracy measurement.
 - The browser profile displayed the saved long-form lessons and unchanged authored-sample count. Private intake receipts, before/after teaching examples, exports and draft results remain in ignored local data, outside source control.
+
+## Not established
 
 - **Correction to the earlier blocker diagnosis:** the PATH CLI (0.137.0) was too old for Astra. Its terminal response was HTTP 400 requesting a newer CLI; unrelated catalog text had triggered a misleading login message. The existing login works with the current bundled CLI. Voicework now reports that failure correctly and supports an explicit executable path. Global configuration and credentials were not changed.
 - **Installed Chrome extension operation:** the extension is packaged and tested at the module/schema level. Live Drive markup, Google authentication/export responses, optional permissions, and installation have not been exercised in the user's browser. Redirected or blocked TXT exports have a manual download-and-attach fallback.
