@@ -106,6 +106,19 @@ A generated draft lists the examples supplied to the model. These IDs explain re
 
 [PRODUCT.md](docs/PRODUCT.md) separates the implemented workflow from future source grouping, independent fact verification, prompt optimization and weight training. [RESEARCH.md](docs/RESEARCH.md) records the source-backed research and reuse decisions.
 
+## Tell stories in your voice (Story Engine)
+
+**Voice profile → Use with Story Engine** turns your profile into a voice file for [Story Engine](https://github.com/gavinjudd/story-engine). Describe the story use (for example *spoken interview answer*) and tick the channels whose habits should carry over. Channels saved as broad long-form lessons are preselected. The others stay off until you choose them. Preview, then export `story-voice.json`. The same is available offline from the command line, reading the local database directly:
+
+```sh
+python3 -m voicework.story_bridge --list
+python3 -m voicework.story_bridge --target 'spoken interview answer' --channel 'long-form writing' \
+  --output story-voice.json            # add --examples to include up to 5 confirmed excerpts
+python3 story_engine.py bundle --voice-profile story-voice.json --seed '…'   # in the story-engine repo
+```
+
+Enabled lessons, including remembered corrections, become traits and avoidances. Practice reasons and story-relevant presentation preferences come next, followed by cadence measured from confirmed, non-held-out samples in the chosen channels. Every trait keeps its learned context, such as `[work email · audience: teammates]`, and broader lessons outrank narrowly conditioned ones. The output is capped at 32 traits and 24 avoidances, and the file reports what was trimmed. Held-out or unconfirmed samples, AI and edited practice options, prior packets (which may contain facts), emoji and sign-off preferences, and evaluation ratings are never included. Excerpts require explicit opt-in. With no usable guidance, `voice_profile` is `null`. The file describes reviewed style evidence. It does not measure fidelity or prove authorship. CLI output files are new and created with mode 0600.
+
 ## Local data and boundaries
 
 - The SQLite database lives in `data/` by default; use `--data-dir /private/location` to change it. This folder is ignored by Git. The database contains private writing and is **not encrypted at rest**; use OS disk encryption and appropriate backups.

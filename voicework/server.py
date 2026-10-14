@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .discovery import capabilities as scan_capabilities, discover
 from .learning import build_profile, contextual_preferences, export_markdown, retrieve, validate_context
+from .story_bridge import available_sources, build_story_voice
 from .matching import same_channel
 from .store import Store, text_field
 from .context import PriorStore, infer_context
@@ -326,6 +327,7 @@ class Handler(BaseHTTPRequestHandler):
                 "profile": build_profile(samples, feedback, lessons), "language_lessons": lessons,
                 "voice_confidence": build_voice_confidence(samples, feedback, lessons, evaluations, quality_checks),
                 "corrections": self.server.corrections.list(), "quality_checks": quality_checks,
+                "story_engine_sources": available_sources(samples, feedback, lessons),
                 "quality_summary": self.server.quality_checks.summary(),
                 "priors": self.server.priors.list(), "evaluations": evaluations,
                 "evaluation_summary": self.server.evaluations.summary(), "discovery_jobs": self.server.discovery_jobs.list(),
@@ -344,6 +346,12 @@ class Handler(BaseHTTPRequestHandler):
                     packet = {key: prior[key] for key in ("label", "text", "context", "source")}
                     markdown += "\n" + "\n".join("> " + line.replace("<", "&lt;").replace(">", "&gt;") for line in json.dumps(packet, ensure_ascii=False, indent=2).splitlines()) + "\n"
             return self._json({"markdown": markdown, "filename": "VOICE_PROFILE.md"})
+        if method == "GET" and path == "/api/export/story-engine":
+            if set(query) - {"target", "channel", "examples"} or any(len(query.get(key, [])) > 1 for key in ("target", "examples")):
+                raise HTTPError(400, "Use target once, channel one or more times, and optional examples=1")
+            voice = build_story_voice(store.samples(), store.feedback(), self.server.language_lessons.list(),
+                                      query.get("target", [""])[0], query.get("channel", []), query.get("examples") == ["1"])
+            return self._json({"story_voice": voice, "filename": "story-voice.json"})
         if method == "GET" and path == "/api/corrections":
             return self._json({"corrections": self.server.corrections.list()})
         if method == "POST" and path == "/api/corrections":

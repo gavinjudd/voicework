@@ -8,7 +8,7 @@ const ui = {
   route: routes[location.hash.slice(1)] ? location.hash.slice(1) : 'write',
   filter: 'pending', context: { channel: 'work', audience: '', intent: '', stakes: '', relationship: '', scenario: '' },
   selections: new Map(), draft: null, brief: '', controls: { polish: 45, detail: 45, warmth: 50, assertiveness: 50, structure: 'auto', register: 'auto' },
-  scanResult: null, scanRunning: null, exportText: '', includeExamples: false, practiceFocus: 'vernacular',
+  scanResult: null, scanRunning: null, exportText: '', includeExamples: false, storyTarget: 'spoken interview answer', storyChannels: null, storyExamples: false, storyVoice: null, practiceFocus: 'vernacular',
   lessonDraft: {dimension: 'vernacular', guidance: '', preferred: '', avoided: ''},
   editedDraft: '', draftUndo: null, rememberDraft: null, replacePrompt: false, generating: false, editorStorageError: false,
   qualityForm: {correctionId: '', brief: '', context: null}, qualityVotes: {},
@@ -171,6 +171,7 @@ async function api(path, method = 'GET', body) {
 async function refresh(renderPage = true) {
   state = await api('/state');
   ui.exportText = '';
+  ui.storyVoice = null; // Revoked lessons must not linger in a stale story-voice preview.
   if (renderPage) render();
 }
 async function busy(control, callback, label = 'Saving…') {
@@ -901,7 +902,7 @@ function renderProfile() {
   const preferencePanel = el('section', { class: 'panel' }, panelHeading('Preferences, in context', 'Your choices and reasons, kept separate from authored evidence.'), el('div', { class: 'panel-body' }, preferenceBody));
   const coverage = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Context coverage'), coverageMap.size ? [...coverageMap].map(([channel, counts]) => el('div', { class: 'coverage-row' }, el('strong', {}, channel || 'work'), el('span', {}, `${plural(counts.lessons, 'lesson')} · ${plural(counts.samples, 'sample')}`))) : helper('Teach a language preference in any context to start. Work, personal, community, and labels you create stay distinct.'));
   const provider = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Generation provider'), providerPill(), el('p', { class: 'export-note' }, state.settings.provider === 'codex' ? `Using your local Codex CLI${state.settings.model ? ` with ${state.settings.model}` : ''}. Selected evidence and your brief are sent to the configured model when you generate.` : 'Offline mode rehearses the workflow with deterministic rules. No language model is running. The README explains how to start with the Codex provider.'), helper(state.capabilities?.codex_available ? 'Codex CLI detected. Authentication is verified only when generation succeeds.' : 'Codex CLI availability has not been confirmed by the server.'));
-  return [pageHeading('Voice profile / evidence, not a score', 'A voice that keeps its context.', 'See what you’ve contributed, what you’ve explicitly preferred, and where there is more to learn.'), stats, el('div', { class: 'layout confidence-layout' }, confidencePanel(), el('div', { class: 'primary-column' }, languageLessonPanel(), preferencePanel, patternPanel, priorPanel()), el('aside', { class: 'aside-column' }, exportPanel(), coverage, provider, el('div', { class: 'aside-note' }, el('h3', {}, 'A profile, not a personality verdict.'), el('p', {}, 'This is a portable collection of evidence and preferences. Coverage grows with your contributions; a completion or XP count never establishes writing accuracy.'))))];
+  return [pageHeading('Voice profile / evidence, not a score', 'A voice that keeps its context.', 'See what you’ve contributed, what you’ve explicitly preferred, and where there is more to learn.'), stats, el('div', { class: 'layout confidence-layout' }, confidencePanel(), el('div', { class: 'primary-column' }, languageLessonPanel(), preferencePanel, patternPanel, priorPanel()), el('aside', { class: 'aside-column' }, exportPanel(), storyEnginePanel(), coverage, provider, el('div', { class: 'aside-note' }, el('h3', {}, 'A profile, not a personality verdict.'), el('p', {}, 'This is a portable collection of evidence and preferences. Coverage grows with your contributions; a completion or XP count never establishes writing accuracy.'))))];
 }
 function exportPanel() {
   const include = input({ type: 'checkbox', checked: ui.includeExamples, onChange: event => { ui.includeExamples = event.target.checked; ui.exportText = ''; preview.replaceChildren(); } });
@@ -918,6 +919,53 @@ function exportPanel() {
   }, 'Preparing…'), 'primary wide', 'download');
   if (ui.exportText) preview.append(details('Portable profile preview', el('pre', { class: 'export-preview' }, ui.exportText), true));
   return el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Take your voice with you'), el('h3', {}, 'A portable voice profile'), el('p', { class: 'export-note' }, 'Export a Markdown profile for Cursor, Codex, ChatGPT, or another writing workflow. Source text is excluded by default.'), el('label', { class: 'checkbox', style: 'margin-bottom: 17px' }, include, el('span', {}, 'Include my confirmed writing examples. Held-out samples stay excluded.')), download, el('div', { style: 'margin-top: 7px' }, previewButton), preview);
+}
+
+function storyEnginePanel() {
+  const sources = state.story_engine_sources || [];
+  if (!ui.storyChannels) ui.storyChannels = sources.filter(item => item.suggested).map(item => item.channel);
+  const preview = el('div', {});
+  const reset = () => { ui.storyVoice = null; preview.replaceChildren(); };
+  const target = input({ maxlength: 200, value: ui.storyTarget, placeholder: 'e.g. spoken interview answer, short story narrator', onInput: event => { ui.storyTarget = event.target.value; reset(); } });
+  const sourceList = sources.length ? el('div', { class: 'story-sources', role: 'group', 'aria-label': 'Voicework channels to draw from' }, sources.map(item => {
+    const box = input({ type: 'checkbox', checked: ui.storyChannels.includes(item.channel), onChange: event => {
+      ui.storyChannels = event.target.checked ? [...new Set([...ui.storyChannels, item.channel])] : ui.storyChannels.filter(key => key !== item.channel); reset();
+    } });
+    const counts = [item.lessons && `${item.lessons} lesson${item.lessons === 1 ? '' : 's'}`, item.feedback && `${item.feedback} practice`, item.samples && `${item.samples} sample${item.samples === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+    return el('label', { class: 'checkbox' }, box, el('span', {}, el('strong', {}, item.label), ` — ${counts}${item.suggested ? ' (saved as broad long-form)' : ''}`));
+  })) : helper('No lessons, practice notes, or confirmed samples yet. Teach a lesson or remember a correction first.');
+  const examples = input({ type: 'checkbox', checked: ui.storyExamples, onChange: event => { ui.storyExamples = event.target.checked; reset(); } });
+  const query = () => {
+    if (!ui.storyTarget.trim()) throw new Error('Describe where Story Engine will use this voice.');
+    if (!ui.storyChannels.length) throw new Error('Choose at least one channel whose habits should carry into the story.');
+    const params = new URLSearchParams({ target: ui.storyTarget.trim() });
+    for (const channel of ui.storyChannels) params.append('channel', channel);
+    if (ui.storyExamples) params.set('examples', '1');
+    return `/export/story-engine?${params}`;
+  };
+  const render = voice => {
+    const p = voice.provenance;
+    preview.replaceChildren(
+      el('p', { class: 'export-note' }, `${p.counts.traits} traits · ${p.counts.avoid} avoid · ${p.counts.examples_included} authored excerpt${p.counts.examples_included === 1 ? '' : 's'} · from ${p.counts.lessons_used} lessons and ${p.counts.feedback_used} practice notes`),
+      ...p.warnings.map(text => el('div', { class: 'callout warning', style: 'margin: 8px 0' }, text)),
+      details('Story Engine voice preview', el('pre', { class: 'export-preview' }, JSON.stringify(voice, null, 2)), true));
+  };
+  const previewButton = button('Preview', () => busy(previewButton, async () => {
+    const result = await api(query()); ui.storyVoice = result.story_voice; render(result.story_voice);
+  }, 'Loading…'), 'wide small');
+  const download = button('Export for Story Engine', () => busy(download, async () => {
+    const result = await api(query()); ui.storyVoice = result.story_voice; render(result.story_voice);
+    const blob = new Blob([JSON.stringify(result.story_voice, null, 2) + '\n'], { type: 'application/json;charset=utf-8' }); const url = URL.createObjectURL(blob);
+    const link = el('a', { href: url, download: result.filename || 'story-voice.json' }); document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast('Story Engine voice exported.');
+  }, 'Preparing…'), 'primary wide', 'download');
+  if (ui.storyVoice) render(ui.storyVoice);
+  return el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Tell stories in your voice'), el('h3', {}, 'Use with Story Engine'),
+    el('p', { class: 'export-note' }, 'Turns the lessons, practice notes and patterns from the channels you choose into a Story Engine voice file. Each habit keeps the context it was learned in. Prior packets and AI options are never included.'),
+    field('Story use', target), el('div', { class: 'field-label', style: 'margin: 12px 0 6px' }, 'Draw habits from'), sourceList,
+    el('label', { class: 'checkbox', style: 'margin: 14px 0 17px' }, examples, el('span', {}, 'Include up to 5 confirmed excerpts from these channels as voice samples. Held-out samples stay excluded.')),
+    download, el('div', { style: 'margin-top: 7px' }, previewButton), preview,
+    helper('Then: python3 story_engine.py bundle --voice-profile story-voice.json --seed "…"'));
 }
 
 function priorPanel() {
