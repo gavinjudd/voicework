@@ -1,0 +1,18 @@
+{
+  "name": "baseline-YYYY-MM",
+  "description": "Replace every item with a real situation you will actually write for. Keep briefs factual (what must be said), not stylistic. Aim for 3+ items per channel, balanced across channels.",
+  "items": [
+    {"context": {"channel": "work", "audience": "teammates", "intent": "status update"},
+     "brief": "Synthetic example: the staging migration slipped from Tuesday to Thursday because the vendor certificate expired; nothing is blocked for QA."},
+    {"context": {"channel": "work", "audience": "manager", "intent": "ask for decision"},
+     "brief": "Synthetic example: need a yes/no by Friday on paying for a second CI runner, $40/month, cuts queue time roughly in half."},
+    {"context": {"channel": "work", "audience": "external partner", "intent": "decline"},
+     "brief": "Synthetic example: we cannot join the October pilot; open to revisiting in Q1 once the API is stable."},
+    {"context": {"channel": "personal", "relationship": "friend", "intent": "make plans"},
+     "brief": "Synthetic example: free Saturday after 3, suggest the taco place, can drive."},
+    {"context": {"channel": "personal", "relationship": "family", "intent": "update"},
+     "brief": "Synthetic example: flight lands 6:40pm Sunday, no need for pickup, will call when home."},
+    {"context": {"channel": "personal", "relationship": "friend", "intent": "decline"},
+     "brief": "Synthetic example: can't make the game night this week, have a deadline, next one for sure."}
+  ]
+}

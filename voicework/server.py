@@ -13,6 +13,8 @@ from urllib.parse import parse_qs, urlsplit
 from .discovery import capabilities as scan_capabilities, discover
 from .learning import build_profile, contextual_preferences, export_markdown, retrieve, validate_context
 from .story_bridge import available_sources, build_story_voice
+from .guidance import writing_inputs
+from .proposals import ProposalStore
 from .matching import same_channel
 from .store import Store, text_field
 from .context import PriorStore, infer_context
@@ -82,6 +84,7 @@ class VoiceworkServer(ThreadingHTTPServer):
         self.corrections = CorrectionStore(store.path)
         self.quality_checks = QualityStore(store.path)
         self.evaluations = EvaluationStore(store.path)
+        self.proposals = ProposalStore(store.path)
         self.discovery_jobs = DiscoveryJobs(store)
         self.web_root = Path(web_root).resolve()
         self.token = secrets.token_urlsafe(32)
@@ -248,25 +251,8 @@ class Handler(BaseHTTPRequestHandler):
         return [{**item, "is_language_lesson": True} for item in self.server.language_lessons.matching(context)]
 
     def _writing_inputs(self, context):
-        samples = self.server.store.samples()
-        feedback = self.server.store.feedback()
-        lessons = self.server.language_lessons.list()
-        available = ([item for item in lessons if item.get("enabled")]
-                     + [item for item in samples if item.get("status") == "confirmed" and not item.get("held_out")]
-                     + feedback + self.server.priors.list(confirmed_only=True))
-        report = resolve_context(context, [item.get("context", {}) for item in available],
-                                 lesson_contexts=[item.get("context", {}) for item in lessons if item.get("enabled")])
-        context = report["context"]
-        evidence = retrieve(samples, context)
-        preferences = contextual_preferences(feedback, context) + self._prior_preferences(context) + self._language_preferences(context)
-        report["evidence_ids"] = [item["id"] for item in evidence]
-        report["lesson_ids"] = [item["id"] for item in preferences if item.get("is_language_lesson")]
-        report["counts"] = {"authored_examples": len(evidence), "language_lessons": len(report["lesson_ids"]),
-                            "feedback": sum(not item.get("is_language_lesson") and not item.get("is_prior") for item in preferences),
-                            "priors": sum(bool(item.get("is_prior")) for item in preferences)}
-        if not evidence and not preferences:
-            report["warnings"].append("No reviewed voice guidance matches this context. This draft cannot demonstrate your calibrated voice.")
-        return context, evidence, preferences, report
+        return writing_inputs(self.server.store.samples(), self.server.store.feedback(), self.server.language_lessons.list(),
+                              self.server.priors.list(confirmed_only=True), context)
 
     def _route(self, path, query, body):
         store, provider = self.server.store, self.server.provider
@@ -328,13 +314,16 @@ class Handler(BaseHTTPRequestHandler):
                 "voice_confidence": build_voice_confidence(samples, feedback, lessons, evaluations, quality_checks),
                 "corrections": self.server.corrections.list(), "quality_checks": quality_checks,
                 "story_engine_sources": available_sources(samples, feedback, lessons),
+                "lesson_proposals": self.server.proposals.list("pending"),
                 "quality_summary": self.server.quality_checks.summary(),
                 "priors": self.server.priors.list(), "evaluations": evaluations,
                 "evaluation_summary": self.server.evaluations.summary(), "discovery_jobs": self.server.discovery_jobs.list(),
-                "settings": {"provider": getattr(provider, "mode", "offline"), "model": getattr(provider, "model", None)},
+                "settings": {"provider": getattr(provider, "mode", "offline"), "model": getattr(provider, "model", None),
+                             "provider_label": getattr(provider, "label", None), "live": getattr(provider, "mode", "offline") in ("codex", "anthropic")},
                 "stats": {"pending": sum(s["status"] == "pending" for s in samples),
                           "confirmed": sum(s["status"] == "confirmed" for s in samples), "rounds": len(rounds)},
-                "capabilities": {"codex_available": bool(provider.available()), "local_scan": True,
+                "capabilities": {"codex_available": getattr(provider, "mode", None) == "codex" and bool(provider.available()),
+                                 "provider_available": bool(provider.available()), "local_scan": True,
                                  "browser_import": True, **scan_capabilities()}, "token": self.server.token})
         if method == "GET" and path == "/api/export":
             markdown = export_markdown(store.samples(), store.feedback(), query.get("examples") == ["1"], self.server.language_lessons.list())
@@ -380,6 +369,13 @@ class Handler(BaseHTTPRequestHandler):
             self._fields(body, {"choice", "meaning", "effort", "notes"})
             case = self.server.quality_checks.rate_case(parts[3], body)
             return self._json({"case": case, "summary": self.server.quality_checks.summary()})
+        if path.startswith("/api/lesson-proposals/") and method == "POST":
+            parts = path.split("/")
+            if len(parts) != 5 or not parts[3] or len(parts[3]) > 100 or parts[4] not in ("accept", "dismiss"):
+                raise HTTPError(404, "Proposal action not found")
+            self._fields(body, set())
+            proposal = self.server.proposals.decide(parts[3], parts[4], self.server.language_lessons)
+            return self._json({"proposal": proposal})
         if method == "GET" and path == "/api/language-lessons":
             return self._json({"language_lessons": self.server.language_lessons.list()})
         if method == "POST" and path == "/api/language-lessons":

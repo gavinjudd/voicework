@@ -117,7 +117,7 @@ The separate baseline evaluation remains available. It creates uncalibrated and 
 
 Hold out whole source documents and their versions, threads, and near-duplicates before computing profiles or optimizing prompts. A held-out sample must not appear as an example, profile statistic, feedback-derived rule, or optimizer input. Manually reserving one sample does not automatically establish those broader isolation guarantees. Use a fixed test set for final comparison, separate from development/validation. Keep in-context performance and transfer to a new context separate.
 
-Begin with a small balanced panel of real scenarios, record its size and per-context outcomes, then repeat after a defined feedback batch. A tiny panel gives directional feedback, not a reliable general accuracy percentage. Automated style similarity and word overlap are diagnostics; the user's preference under factual constraints is the target.
+Begin with a small balanced panel of real scenarios, record its size and per-context outcomes, then repeat after a defined feedback batch. `python3 -m voicework.panel` implements this: a frozen panel, per-run profile snapshots, holdout-overlap refusal and per-channel reports. The panel itself must be written from real situations; the bundled template is synthetic. A tiny panel gives directional feedback, not a reliable general accuracy percentage. Automated style similarity and word overlap are diagnostics; the user's preference under factual constraints is the target.
 
 ## Roadmap with exit criteria
 

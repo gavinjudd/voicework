@@ -236,25 +236,25 @@ def _excerpt(value, maximum=700):
 def _warnings(result):
     warnings = result.get('warnings')
     if not isinstance(warnings, list) or len(warnings) > 20 or any(not isinstance(x, str) or len(x) > 1000 for x in warnings):
-        raise ValueError('Codex returned invalid document warnings.')
+        raise ValueError('The model returned invalid document warnings.')
     return warnings
 
 
 def validate_batch_result(result, expected):
     if not isinstance(result, dict) or set(result) != {'blocks', 'warnings'}:
-        raise ValueError('Codex returned an invalid document batch; no partial document was returned.')
+        raise ValueError('The model returned an invalid document batch; no partial document was returned.')
     _warnings(result)
     output = result['blocks']
     if not isinstance(output, list) or len(output) != len(expected):
-        raise ValueError('Codex omitted or repeated a document block; no partial document was returned.')
+        raise ValueError('The model omitted or repeated a document block; no partial document was returned.')
     size = 0
     for item, original in zip(output, expected):
         if not isinstance(item, dict) or set(item) != {'id', 'text'} or item['id'] != original['id']:
-            raise ValueError('Codex changed document block order or identifiers; no partial document was returned.')
+            raise ValueError('The model changed document block order or identifiers; no partial document was returned.')
         validate_document_text(item['text'], output=True)
         size += len(item['text'])
     if size > MAX_CHUNK_CHARS * 2:
-        raise ValueError('Codex returned an oversized document batch; no partial document was returned.')
+        raise ValueError('The model returned an oversized document batch; no partial document was returned.')
     return output
 
 
@@ -377,20 +377,20 @@ def _review_units(source, draft):
 
 def validate_review_result(result):
     if not isinstance(result, dict) or set(result) != {'content_issues', 'voice_issues', 'warnings'}:
-        raise ValueError('Codex returned an invalid document review.')
+        raise ValueError('The model returned an invalid document review.')
     _warnings(result)
     for key in ('content_issues', 'voice_issues'):
         if not isinstance(result[key], list) or len(result[key]) > 20:
-            raise ValueError('Codex returned an invalid document review.')
+            raise ValueError('The model returned an invalid document review.')
         for issue in result[key]:
             if not isinstance(issue, dict) or set(issue) != {'severity', 'code', 'message', 'section'}:
-                raise ValueError('Codex returned an invalid document review issue.')
+                raise ValueError('The model returned an invalid document review issue.')
             if issue['severity'] not in ('error', 'warning') or not isinstance(issue['code'], str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', issue['code']):
-                raise ValueError('Codex returned an invalid document review issue.')
+                raise ValueError('The model returned an invalid document review issue.')
             if not isinstance(issue['message'], str) or not issue['message'].strip() or len(issue['message']) > 1000:
-                raise ValueError('Codex returned an invalid document review message.')
+                raise ValueError('The model returned an invalid document review message.')
             if not isinstance(issue['section'], str) or len(issue['section']) > 100:
-                raise ValueError('Codex returned an invalid document review section.')
+                raise ValueError('The model returned an invalid document review section.')
     return result
 
 
@@ -414,7 +414,7 @@ def review_document(provider, source, draft, frozen):
     voice_issues, warnings = [], []
     has_voice = any(frozen.get(key) for key in ('authored_examples', 'calibration_feedback', 'language_lessons', 'assistant_derived_priors'))
     review = {'provider': provider.mode, 'status': 'not_checked', 'units_total': 0, 'units_completed': 0}
-    if provider.mode == 'codex':
+    if provider.mode in ('codex', 'anthropic'):
         try:
             batches = _review_units(source, draft)
             review['units_total'] = len(batches)
@@ -422,7 +422,7 @@ def review_document(provider, source, draft, frozen):
                 result = validate_review_result(provider._invoke('document_review', dict(copy.deepcopy(frozen), units=units, review_batch=index + 1, review_batches=len(batches))))
                 allowed_sections = {unit['section'] for unit in units} | {''}
                 if any(issue['section'] not in allowed_sections for key in ('content_issues', 'voice_issues') for issue in result[key]):
-                    raise ValueError('Codex referenced a section outside this document review batch.')
+                    raise ValueError('The model referenced a section outside this document review batch.')
                 issues.extend(result['content_issues'])
                 voice_issues.extend(result['voice_issues'])
                 warnings.extend(result['warnings'])
@@ -460,7 +460,7 @@ def generate_document(provider, context, source, controls, payload, offline_warn
     replacements, warnings = {}, []
     if provider.mode == 'offline':
         text = source
-        warnings = [offline_warning, 'Whole-document offline rehearsal preserves the complete source unchanged. Rewriting and semantic voice/content review require Codex.']
+        warnings = [offline_warning, 'Whole-document offline rehearsal preserves the complete source unchanged. Rewriting and semantic voice/content review require a live provider (Codex or Anthropic).']
     else:
         block_positions = {block['id']: index for index, block in enumerate(blocks)}
         # Outline/excerpts are explicitly bounded context, never substitutions
@@ -511,6 +511,6 @@ def generate_document(provider, context, source, controls, payload, offline_warn
     warnings.extend(checks['warnings'])
     warnings.append(REVIEW_LIMITATION)
     return {'text': text, 'provider': provider.mode,
-            'evidence_ids': [item['id'] for item in frozen.get('authored_examples', [])] if provider.mode == 'codex' else [],
+            'evidence_ids': [item['id'] for item in frozen.get('authored_examples', [])] if provider.mode in ('codex', 'anthropic') else [],
             'warnings': list(dict.fromkeys(warnings)), 'checks': checks, 'sections': sections,
-            'generation_batches': len(batches) if provider.mode == 'codex' else 0}
+            'generation_batches': len(batches) if provider.mode in ('codex', 'anthropic') else 0}

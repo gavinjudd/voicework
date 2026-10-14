@@ -1,4 +1,4 @@
-"""Explicit offline rehearsal and a bounded Codex CLI writing adapter.
+"""Explicit offline rehearsal and bounded live writing adapters (Codex CLI, Anthropic API).
 
 No desktop conversation state or hidden memory is assumed. Prompts contain only
 supplied context, approved examples and calibration feedback.
@@ -10,13 +10,54 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .language import matching_lessons, validate_focus
 from .learning import contextual_preferences, retrieve
 from .matching import same_channel
 
 DEFAULT_MODEL = 'gpt-6-astra'
+# Live providers generate with a language model. Records keep the exact
+# provider that produced them; offline stays rehearsal-only.
+LIVE_PROVIDERS = ('codex', 'anthropic')
+PROVIDER_MODES = ('offline',) + LIVE_PROVIDERS
+DEFAULT_MODELS = {'codex': DEFAULT_MODEL, 'anthropic': 'claude-opus-5-5'}
+PROVIDER_LABELS = {'offline': 'Offline rehearsal', 'codex': 'Codex', 'anthropic': 'Anthropic API'}
+ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
+ANTHROPIC_VERSION = '2023-06-01'
+MAX_RESPONSE_BYTES = 2_000_000
+
+
+def is_live(mode):
+    return mode in LIVE_PROVIDERS
+
+
+def _anthropic_url(value):
+    url = (value or ANTHROPIC_URL).strip()
+    parts = urlsplit(url)
+    loopback = parts.hostname in ('127.0.0.1', 'localhost', '::1')
+    if parts.scheme != 'https' and not (parts.scheme == 'http' and loopback):
+        raise ValueError('The Anthropic endpoint must use https (plain http is allowed only on loopback for tests).')
+    if parts.username or parts.password or parts.query or parts.fragment:
+        raise ValueError('The Anthropic endpoint must not contain credentials, a query or a fragment.')
+    return url
+
+
+def _anthropic_failure(status):
+    if status in (401, 403):
+        return 'Anthropic rejected the API key. Check ANTHROPIC_API_KEY and its workspace access.'
+    if status == 404:
+        return 'The selected model is unavailable to this Anthropic key. Check the model name with --model.'
+    if status == 429:
+        return 'Anthropic rate-limited the request. Wait and retry.'
+    if status in (500, 502, 503, 504, 529):
+        return 'Anthropic is temporarily unavailable or overloaded. Retry shortly.'
+    if status == 400:
+        return 'Anthropic rejected the request as invalid (status 400). The request may be too long for the selected model.'
+    return 'Anthropic returned HTTP %s.' % status
 OFFLINE_WARNING = 'Offline rehearsal uses simple text rules, not a language model. It does not measure or demonstrate writing fidelity.'
 
 
@@ -64,18 +105,27 @@ def _payload(context, evidence, preferences):
 
 
 class Provider:
-    def __init__(self, mode='offline', model=None, timeout=240, executable=None):
-        if mode not in ('offline', 'codex'):
-            raise ValueError('Provider must be offline or codex.')
+    def __init__(self, mode='offline', model=None, timeout=240, executable=None, endpoint=None):
+        if mode not in PROVIDER_MODES:
+            raise ValueError('Provider must be offline, codex or anthropic.')
         self.mode = mode
-        self.model = model or DEFAULT_MODEL
+        self.model = model or DEFAULT_MODELS.get(mode, DEFAULT_MODEL)
+        self.label = PROVIDER_LABELS[mode]
+        self.endpoint = _anthropic_url(endpoint if endpoint is not None else os.environ.get('VOICEWORK_ANTHROPIC_URL')) if mode == 'anthropic' else None
         self.timeout = timeout
         configured = executable if executable is not None else os.environ.get('VOICEWORK_CODEX_BIN', 'codex')
         if not isinstance(configured, str) or not configured.strip() or '\x00' in configured:
             raise ValueError('Codex executable must be a command name or executable path.')
         self.executable = configured
 
+    @property
+    def live(self):
+        return is_live(self.mode)
+
     def available(self):
+        if self.mode == 'anthropic':
+            # Presence only; the key is read per request and never stored or returned.
+            return bool(os.environ.get('ANTHROPIC_API_KEY', '').strip())
         return shutil.which(self.executable) is not None
 
     def infer_context(self, sample):
@@ -86,7 +136,7 @@ class Provider:
         result = self._invoke('context', {'selected_sample': selected})
         # The schema is also checked locally; a model response cannot set a
         # confirmed flag, persist sample changes, or choose its own provider.
-        return validate_analysis(result, 'codex')
+        return validate_analysis(result, self.mode)
 
     def generate_round(self, context, evidence, preferences, focus='mixed'):
         focus = validate_focus(focus)
@@ -122,12 +172,12 @@ class Provider:
         result = self._invoke('round', payload)
         options = result.get('options')
         if not isinstance(options, list) or len(options) != 2:
-            raise ValueError('Codex returned an invalid comparison. Please retry.')
+            raise ValueError('%s returned an invalid comparison. Please retry.' % self.label)
         for i, option in enumerate(options):
             if not isinstance(option, dict) or not isinstance(option.get('text'), str) or not option['text'].strip() or len(option['text']) > 20000:
-                raise ValueError('Codex returned an invalid comparison. Please retry.')
+                raise ValueError('%s returned an invalid comparison. Please retry.' % self.label)
             option['id'] = ('a', 'b')[i]
-        return {'options': options, 'provider': 'codex', 'warnings': result.get('warnings', [])}
+        return {'options': options, 'provider': self.mode, 'warnings': result.get('warnings', [])}
 
     def generate_draft(self, context, brief, controls, evidence, preferences):
         samples = _training_samples(evidence, context)
@@ -161,9 +211,9 @@ class Provider:
         payload.update(brief=brief, controls=controls)
         result = self._invoke('draft', payload)
         if not isinstance(result.get('text'), str) or not result['text'].strip() or len(result['text']) > 30000:
-            raise ValueError('Codex returned an empty or invalid draft. Please retry.')
+            raise ValueError('%s returned an empty or invalid draft. Please retry.' % self.label)
         # Report supplied examples, not a fabricated causal attribution from the model.
-        return {'text': result['text'], 'provider': 'codex', 'evidence_ids': [s['id'] for s in samples], 'warnings': result.get('warnings', [])}
+        return {'text': result['text'], 'provider': self.mode, 'evidence_ids': [s['id'] for s in samples], 'warnings': result.get('warnings', [])}
 
     def generate_document(self, context, source, controls, evidence, preferences):
         from .documents import generate_document
@@ -177,6 +227,59 @@ class Provider:
         return check_document(self, context, source, text, controls, _payload(context, evidence, preferences))
 
     def _invoke(self, task, payload):
+        if self.mode == 'anthropic':
+            return self._invoke_anthropic(task, payload)
+        if self.mode != 'codex':
+            raise ValueError('Offline rehearsal does not call a language model.')
+        return self._invoke_codex(task, payload)
+
+    def _invoke_anthropic(self, task, payload):
+        key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
+        if not key:
+            raise ValueError('ANTHROPIC_API_KEY is not set for the Voicework process. Offline rehearsal remains available separately.')
+        # A forced tool call returns schema-shaped JSON. No other tools,
+        # browsing or server-side features are offered to the model.
+        body = {
+            'model': self.model,
+            'max_tokens': 32000 if task in ('document', 'document_review') else 8192,
+            'messages': [{'role': 'user', 'content': _prompt(task, payload)}],
+            'tools': [{'name': 'voicework_result', 'description': 'Return the complete Voicework result.', 'input_schema': _schema(task)}],
+            'tool_choice': {'type': 'tool', 'name': 'voicework_result'},
+        }
+        request = urllib.request.Request(self.endpoint, data=json.dumps(body).encode('utf-8'), method='POST', headers={
+            'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION})
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            with opener.open(request, timeout=self.timeout) as response:
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+        except urllib.error.HTTPError as exc:
+            # Do not echo the response body: it can contain prompt fragments.
+            raise ValueError('Anthropic generation failed. ' + _anthropic_failure(exc.code)) from None
+        except (urllib.error.URLError, OSError) as exc:
+            if 'timed out' in str(exc).lower():
+                raise ValueError('Anthropic took too long. No feedback was saved; retry or use offline rehearsal.') from None
+            raise ValueError('Could not reach the Anthropic API. Check network access.') from None
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise ValueError('Anthropic returned an oversized response. Please retry.')
+        try:
+            message = json.loads(raw.decode('utf-8'))
+        except (ValueError, UnicodeError):
+            raise ValueError('Anthropic returned invalid JSON. Please retry.') from None
+        if not isinstance(message, dict):
+            raise ValueError('Anthropic returned an invalid response. Please retry.')
+        if message.get('stop_reason') == 'max_tokens':
+            raise ValueError('Anthropic stopped at the output limit before finishing. No partial result was used; retry with a shorter input.')
+        calls = [block for block in message.get('content') or [] if isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') == 'voicework_result']
+        if len(calls) != 1 or not isinstance(calls[0].get('input'), dict):
+            raise ValueError('Anthropic did not return a structured result. Please retry.')
+        # Round-trip through the strict parser so duplicate keys cannot hide.
+        try:
+            result = json.loads(json.dumps(calls[0]['input']), object_pairs_hook=_unique_object)
+        except ValueError:
+            raise ValueError('Anthropic returned invalid JSON. Please retry.') from None
+        return _checked_result(result, self.label)
+
+    def _invoke_codex(self, task, payload):
         executable = shutil.which(self.executable)
         if not executable:
             raise ValueError('The selected Codex CLI is not installed or executable. Set --codex-bin or VOICEWORK_CODEX_BIN to a valid Codex executable. Offline rehearsal remains available separately.')
@@ -221,9 +324,18 @@ class Provider:
                 result = json.loads(result_file.read_text(encoding='utf-8'), object_pairs_hook=_unique_object)
             except (ValueError, UnicodeError):
                 raise ValueError('Codex returned invalid JSON. Please retry.') from None
-            if not isinstance(result, dict) or not isinstance(result.get('warnings', []), list) or any(not isinstance(x, str) for x in result.get('warnings', [])):
-                raise ValueError('Codex returned an invalid response. Please retry.')
-            return result
+            return _checked_result(result, 'Codex')
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _checked_result(result, label):
+    if not isinstance(result, dict) or not isinstance(result.get('warnings', []), list) or any(not isinstance(x, str) for x in result.get('warnings', [])):
+        raise ValueError('%s returned an invalid response. Please retry.' % label)
+    return result
 
 
 def _schema(task):

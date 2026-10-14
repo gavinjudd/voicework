@@ -1,6 +1,6 @@
 """Blinded, same-task comparisons kept separate from calibration feedback.
 
-Only completed Codex comparisons enter the real-model preference counts. These
+Only completed live-model (Codex or Anthropic) comparisons enter the real-model preference counts. These
 counts describe this user's ratings, not a writing-accuracy estimate.
 """
 import copy
@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .learning import retrieve, validate_context
 from .store import text_field
+from .migrations import allow_live_provider
 
 
 NEUTRAL_CONTROLS = {"polish": 50, "detail": 50, "warmth": 50, "assertiveness": 50, "structure": "auto"}
@@ -49,13 +50,14 @@ class EvaluationStore:
             conn.execute("""CREATE TABLE IF NOT EXISTS eval_cases (
                 id TEXT PRIMARY KEY,
                 context TEXT NOT NULL, brief TEXT NOT NULL, options TEXT NOT NULL,
-                provider TEXT NOT NULL CHECK(provider IN ('offline','codex')),
+                provider TEXT NOT NULL CHECK(provider IN ('offline','codex','anthropic')),
                 model TEXT NOT NULL, controls TEXT NOT NULL,
                 mapping TEXT NOT NULL, provider_warnings TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'unrated' CHECK(status IN ('unrated','rated')),
                 created_at TEXT NOT NULL, choice TEXT,
                 factual_issue INTEGER, notes TEXT, rated_at TEXT
             )""")
+            allow_live_provider(conn, "eval_cases")
         self.path.chmod(0o600)
 
     @contextmanager
@@ -91,8 +93,8 @@ class EvaluationStore:
         context = validate_context(context)
         brief = text_field(brief, "brief", 15000, True)
         mode = getattr(provider, "mode", None)
-        if mode not in {"offline", "codex"}:
-            raise ValueError("Evaluation requires an explicit offline or codex provider")
+        if mode not in {"offline", "codex", "anthropic"}:
+            raise ValueError("Evaluation requires an explicit offline, codex or anthropic provider")
         if not isinstance(evidence, list) or not all(isinstance(item, dict) for item in evidence):
             raise ValueError("Evaluation evidence must be a list of samples")
         if not isinstance(preferences, list) or not all(isinstance(item, dict) for item in preferences):
@@ -154,7 +156,7 @@ class EvaluationStore:
                 if row["provider"] == "offline":
                     target["offline_count"] += 1
                     target["rated_offline"] += row["status"] == "rated"
-                elif row["provider"] == "codex" and row["status"] == "rated":
+                elif row["provider"] in ("codex", "anthropic") and row["status"] == "rated":
                     target["rated_real"] += 1
                     target["factual_flags"] += bool(row["factual_issue"])
                     result = json.loads(row["mapping"]).get(row["choice"], row["choice"])

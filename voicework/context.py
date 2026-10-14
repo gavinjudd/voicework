@@ -51,7 +51,7 @@ def infer_context(sample, provider):
     """Analyze only the user-selected sample; return a preview with no writes."""
     if getattr(provider, "mode", None) == "offline":
         return _infer_offline(analysis_input(sample))
-    if getattr(provider, "mode", None) != "codex":
+    if getattr(provider, "mode", None) not in ("codex", "anthropic"):
         raise ValueError("Unknown context analysis provider")
     return provider.infer_context(sample)
 

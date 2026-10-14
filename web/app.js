@@ -194,10 +194,15 @@ function navigate(route) {
 window.addEventListener('hashchange', () => {
   if (routes[location.hash.slice(1)]) { ui.route = location.hash.slice(1); render(); }
 });
-function providerName(provider = state?.settings?.provider) { return provider === 'codex' ? 'Codex configured' : 'Offline rehearsal'; }
+const LIVE_PROVIDERS = new Set(['codex', 'anthropic']);
+const PROVIDER_LABELS = { codex: 'Codex', anthropic: 'Anthropic API', offline: 'Offline rehearsal' };
+function isLive(provider = state?.settings?.provider) { return LIVE_PROVIDERS.has(provider); }
+function modelName(provider = state?.settings?.provider) { return PROVIDER_LABELS[provider] || 'the model'; }
+function providerPhrase(provider = state?.settings?.provider) { return provider === 'anthropic' ? 'the Anthropic API' : modelName(provider); }
+function providerName(provider = state?.settings?.provider) { return isLive(provider) ? `${modelName(provider)} configured` : 'Offline rehearsal'; }
 function providerPill(provider = state?.settings?.provider) {
-  const enabled = provider === 'codex';
-  return el('span', { class: 'status-pill', title: enabled ? 'Generation uses your configured Codex CLI provider.' : 'Deterministic local examples. No AI model is running.' }, el('span', { class: `status-dot ${enabled ? 'live' : ''}` }), providerName(provider));
+  const enabled = isLive(provider);
+  return el('span', { class: 'status-pill', title: enabled ? `Generation uses your configured ${modelName(provider)} provider.` : 'Deterministic local examples. No AI model is running.' }, el('span', { class: `status-dot ${enabled ? 'live' : ''}` }), providerName(provider));
 }
 function contextPills(context = {}) {
   return el('div', { class: 'context-pills' }, ['channel', 'audience', 'intent', 'relationship', 'stakes'].filter(key => context[key]).map(key => el('span', { class: 'context-pill', title: key }, context[key])));
@@ -237,7 +242,7 @@ function render() {
   const pending = state.samples.filter(sample => sample.status === 'pending').length;
   const nav = el('nav', { class: 'nav', 'aria-label': 'Workspace' }, Object.entries(routes).map(([key, label]) => el('button', { class: `nav-button ${ui.route === key ? 'active' : ''}`, 'aria-current': ui.route === key ? 'page' : undefined, onClick: () => navigate(key) }, icon(key), label, key === 'samples' && pending > 0 && el('span', { class: 'nav-count' }, pending))));
   const sidebar = el('aside', { class: 'sidebar' }, el('div', { class: 'brand' }, el('span', { class: 'brand-mark', 'aria-hidden': 'true' }, 'v.'), el('div', {}, el('div', { class: 'brand-name' }, 'voicework'), el('div', { class: 'brand-caption' }, 'A practice in sounding like you'))), el('div', { class: 'nav-label' }, 'Your workspace'), nav,
-    el('div', { class: 'sidebar-bottom' }, el('div', { class: 'local-label' }, icon('lock'), 'Local by default'), el('p', { class: 'sidebar-note' }, state.settings.provider === 'codex' ? 'Samples stay in this workspace. Selected evidence is sent to Codex when you generate.' : 'Your samples and feedback stay in this workspace. You decide what becomes evidence.'), el('div', { class: 'sidebar-footer' }, el('span', {}, 'VOICEWORK / LOCAL'), el('span', {}, 'v0.1'))));
+    el('div', { class: 'sidebar-bottom' }, el('div', { class: 'local-label' }, icon('lock'), 'Local by default'), el('p', { class: 'sidebar-note' }, isLive() ? `Samples stay in this workspace. Selected evidence is sent to ${providerPhrase()} when you generate.` : 'Your samples and feedback stay in this workspace. You decide what becomes evidence.'), el('div', { class: 'sidebar-footer' }, el('span', {}, 'VOICEWORK / LOCAL'), el('span', {}, 'v0.1'))));
   const pages = { practice: renderPractice, samples: renderSamples, write: renderWrite, evaluate: renderEvaluate, profile: renderProfile };
   const main = el('main', { id: 'main', class: 'main fade-in', tabindex: '-1' }, pages[ui.route]());
   const workspace = el('div', { class: 'workspace' }, el('header', { class: 'topbar' }, el('div', { class: 'breadcrumb' }, el('span', {}, 'Personal workspace'), el('span', { class: 'slash' }, '/'), el('strong', {}, routes[ui.route])), providerPill()), main);
@@ -334,9 +339,9 @@ function renderPractice() {
   const column = el('div', { class: 'primary-column' }, currentRound ? roundPanel(currentRound) : roundSetup(), languageLessonPanel({includeForm: true}));
   if (pending.review) column.append(callout(`${plural(pending.review, 'sample')} waiting for review`, 'You can keep practicing now. Confirm authorship later if you want these samples to add evidence.', '', button('Review samples', () => navigate('samples'), 'small', 'arrow')));
   const hasTeaching = state.feedback.length > 0 || activeLanguageLessons().length > 0;
-  const startNote = !confirmed.length && state.settings.provider === 'codex'
-    ? (hasTeaching ? 'Your explicit lessons and choices can guide Codex even without samples. Calibration is still developing; judge each result.' : 'Uncalibrated, and ready to learn. Codex can start with a comparison now; your choices, corrections, and direct lessons will provide direction.')
-    : (state.settings.provider === 'codex' ? 'Your lessons, choices, and optional confirmed writing provide context for Codex.' : 'Offline mode lets you record lessons and rehearse comparisons with deterministic examples. A language model is not running.');
+  const startNote = !confirmed.length && isLive()
+    ? (hasTeaching ? `Your explicit lessons and choices can guide ${providerPhrase()} even without samples. Calibration is still developing; judge each result.` : `Uncalibrated, and ready to learn. ${providerPhrase()} can start with a comparison now; your choices, corrections, and direct lessons will provide direction.`)
+    : (isLive() ? `Your lessons, choices, and optional confirmed writing provide context for ${providerPhrase()}.` : 'Offline mode lets you record lessons and rehearse comparisons with deterministic examples. A language model is not running.');
   const aside = el('aside', { class: 'aside-column' }, journeyPanel(), stepsPanel(), el('div', { class: 'aside-note' }, el('h3', {}, 'Samples are optional.'), el('p', {}, startNote), button('Add writing samples later', () => navigate('samples'), 'quiet small', 'plus')), el('div', { class: 'aside-note' }, el('h3', {}, 'Teach the language and the presentation.'), el('p', {}, 'Your everyday expressions, vocabulary, sentence structure, and rhythm can change with the audience. Paragraphs, bullets, openings, and sign-offs have their own preferences, too.')));
   return [pageHeading('Calibration / words, sentences, and context', 'Teach it how you actually write.', 'Start with a comparison or a direct lesson. No writing samples required; every choice gives it clearer direction.'), el('div', { class: 'layout confidence-layout' }, confidencePanel(), column, aside)];
 }
@@ -350,8 +355,8 @@ function roundSetup() {
     focusButtons.push([key, control]); return control;
   }));
   updateHelp();
-  const submit = button(state.settings.provider === 'codex' ? 'Compare two versions' : 'Rehearse a comparison', null, 'primary', 'arrow'); submit.type = 'submit';
-  const form = el('form', { class: 'panel' }, panelHeading('What should we tune?', 'Pick a focus, then give it a situation.', badge('Samples optional')), el('div', { class: 'panel-body' }, el('div', {class: 'field'}, el('span', {class: 'field-label'}, 'Practice focus'), picker, focusHelp), context.node), el('div', { class: 'panel-foot' }, helper(state.settings.provider === 'codex' ? (activeLanguageLessons().length || state.feedback.length ? 'Uses your contextual lessons and choices. Samples are optional.' : 'Start uncalibrated. Teach it through choices and corrections.') : 'Offline comparisons rehearse the workflow with simple rules.'), submit));
+  const submit = button(isLive() ? 'Compare two versions' : 'Rehearse a comparison', null, 'primary', 'arrow'); submit.type = 'submit';
+  const form = el('form', { class: 'panel' }, panelHeading('What should we tune?', 'Pick a focus, then give it a situation.', badge('Samples optional')), el('div', { class: 'panel-body' }, el('div', {class: 'field'}, el('span', {class: 'field-label'}, 'Practice focus'), picker, focusHelp), context.node), el('div', { class: 'panel-foot' }, helper(isLive() ? (activeLanguageLessons().length || state.feedback.length ? 'Uses your contextual lessons and choices. Samples are optional.' : 'Start uncalibrated. Teach it through choices and corrections.') : 'Offline comparisons rehearse the workflow with simple rules.'), submit));
   form.addEventListener('submit', event => { event.preventDefault(); busy(submit, async () => { await api('/rounds', 'POST', { context: context.get(), focus: ui.practiceFocus }); await refresh(); }, 'Creating comparison…'); });
   return form;
 }
@@ -423,7 +428,7 @@ function roundPanel(round) {
   const rewrite = el('textarea', { rows: 3, placeholder: `Rewrite a phrase or sentence your way. ${focus.example}`, value: initial.edited_text, maxlength: 10000, onInput: event => { initial.edited_text = event.target.value; } });
   const notes = el('textarea', { rows: 2, style: 'min-height: 70px', placeholder: focus.note, value: initial.notes, maxlength: 4000, onInput: event => { initial.notes = event.target.value; } });
   const presentation = el('div', { class: 'presentation-fields' }, Object.entries(presentationOptions).map(([key, [label, choices]]) => field(label, select(choices, initial.presentation[key] || '', { onChange: event => { initial.presentation[key] = event.target.value; } }))));
-  const form = el('form', { class: 'panel' }, panelHeading('Which sounds more like you?', `${focus.label}: ${focus.coaching}`, badge(round.provider === 'codex' ? 'Codex round' : 'Heuristic rehearsal', round.provider === 'codex' ? '' : 'amber')),
+  const form = el('form', { class: 'panel' }, panelHeading('Which sounds more like you?', `${focus.label}: ${focus.coaching}`, badge(isLive(round.provider) ? `${modelName(round.provider)} round` : 'Heuristic rehearsal', isLive(round.provider) ? '' : 'amber')),
     el('div', { class: 'round-context' }, contextPills(round.context), round.context?.scenario && el('p', { class: 'round-scenario' }, round.context.scenario)),
     el('div', { class: 'panel-body' }, options, el('div', { class: 'neither-row' }, neither, helper('A rejection is useful feedback, too.')),
       el('div', { class: 'feedback-fields' }, field('Teach the language difference', notes, 'optional'), field('Your words, your sentence', rewrite, 'optional correction'), details('Presentation: paragraphs, structure & more', presentation, false))),
@@ -460,18 +465,18 @@ function sampleCard(sample, { nested = false } = {}) {
   card.append(actions);
   if (!sample.held_out) {
     const preview = el('div', {});
-    const infer = button(state.settings.provider === 'codex' ? 'Suggest context with Codex' : 'Suggest context locally', () => busy(infer, async () => {
+    const infer = button(isLive() ? `Suggest context with ${providerPhrase()}` : 'Suggest context locally', () => busy(infer, async () => {
       const {inference} = await api(`/samples/${encodeURIComponent(sample.id)}/infer`, 'POST', {});
       const edit = contextEditor(inference.context, {remember: false, expanded: true, scenario: true});
       const apply = button('Apply reviewed context', () => busy(apply, async () => {
         await api(`/samples/${encodeURIComponent(sample.id)}`, 'PATCH', {context: edit.get()}); await refresh(); toast('Context updated. Authorship status was preserved.');
       }), 'small primary');
       preview.replaceChildren(el('section', {class:'panel panel-pad', style:'margin-top:12px'}, el('h3', {}, 'A provisional reconstruction'),
-        helper(inference.provider === 'codex' ? 'Model suggestions. Check them against what actually happened.' : 'Local clues only; no AI model was used.'),
+        helper(isLive(inference.provider) ? 'Model suggestions. Check them against what actually happened.' : 'Local clues only; no AI model was used.'),
         el('ul', {}, (inference.rationale || []).map(x => el('li', {}, x))),
         details('Uncertainties and authorship clues', el('div', {}, [...(inference.uncertainties || []), ...(inference.authorship_signals || [])].map(x => helper(x)))), edit.node, apply));
     }, 'Analyzing…'), 'small', 'spark');
-    card.append(el('div', {style:'margin-top:12px'}, infer, helper(state.settings.provider === 'codex' ? 'This action sends this sample to Codex for analysis. It does not confirm authorship.' : 'Infer a starting context from the passage and source, then correct it.'), preview));
+    card.append(el('div', {style:'margin-top:12px'}, infer, helper(isLive() ? `This action sends this sample to ${providerPhrase()} for analysis. It does not confirm authorship.` : 'Infer a starting context from the passage and source, then correct it.'), preview));
   }
   const context = contextEditor(sample.context, { remember: false });
   const titleControl = input({ value: title, maxlength: 200 });
@@ -735,7 +740,7 @@ function documentEvidenceContents() {
 function refreshDocumentDiagnostics(includeEvidence = false) {
   const working = ui.documentStarting || activeDocumentJob(ui.document.job);
   const submit = document.querySelector('#document-submit');
-  if (submit) {submit.disabled = working; submit.textContent = working ? 'Request in progress…' : state.settings.provider === 'codex' ? 'Rewrite whole document' : 'Rehearse document rewrite';}
+  if (submit) {submit.disabled = working; submit.textContent = working ? 'Request in progress…' : isLive() ? 'Rewrite whole document' : 'Rehearse document rewrite';}
   const file = document.querySelector('#document-file'); if (file) file.disabled = working;
   const evidence = document.querySelector('#document-evidence');
   if (evidence && includeEvidence) {evidence.replaceChildren(...documentEvidenceContents().filter(Boolean)); evidence.hidden = !ui.document.result;}
@@ -773,15 +778,15 @@ function renderDocumentWrite() {
   }, 'Matching…'), 'small'); preview.disabled = generating;
   const previewArea = el('div', {id: 'document-context-preview'}, ui.documentContextPreview && documentContextReport({context_report: ui.documentContextPreview}));
   const adjustments = draftControls({...doc.controls}, value => changeDocument({controls: value}), generating);
-  const submit = button(working ? 'Request in progress…' : state.settings.provider === 'codex' ? 'Rewrite whole document' : 'Rehearse document rewrite', null, 'primary', 'write'); submit.type = 'submit'; submit.id = 'document-submit'; submit.disabled = working;
+  const submit = button(working ? 'Request in progress…' : isLive() ? 'Rewrite whole document' : 'Rehearse document rewrite', null, 'primary', 'write'); submit.type = 'submit'; submit.id = 'document-submit'; submit.disabled = working;
   const sourceDownload = button('Download source', () => downloadDocumentText(ui.document.source, (ui.document.sourceName || 'document-source.md').replace(/[\/\\]/g, '_')), 'small quiet', 'download'); sourceDownload.disabled = !doc.source; source.addEventListener('input', () => {sourceDownload.disabled = !ui.document.source;});
-  const form = el('form', {class: 'panel document-input'}, panelHeading('Your original document', 'Plain text or Markdown. The complete source stays separate from the draft.'), el('div', {class: 'panel-body'}, field('Read a local file', file), helper('Choosing a file reads it in this browser. Generation or checks send its text to the local server and, in Codex mode, to your configured Codex provider.'), field('Or paste the document', source), el('div', {class: 'document-source-meta'}, count, sourceDownload), doc.sourceName && helper(`Local file: ${doc.sourceName}`), trained, context.node, el('div', {class: 'document-context-preview'}, preview, previewArea), details('Adjust this document', adjustments)), el('div', {class: 'panel-foot'}, helper('Preserve the substance. Review every important change.'), submit));
+  const form = el('form', {class: 'panel document-input'}, panelHeading('Your original document', 'Plain text or Markdown. The complete source stays separate from the draft.'), el('div', {class: 'panel-body'}, field('Read a local file', file), helper('Choosing a file reads it in this browser. Generation or checks send its text to the local server and, with a live provider, to your configured model provider.'), field('Or paste the document', source), el('div', {class: 'document-source-meta'}, count, sourceDownload), doc.sourceName && helper(`Local file: ${doc.sourceName}`), trained, context.node, el('div', {class: 'document-context-preview'}, preview, previewArea), details('Adjust this document', adjustments)), el('div', {class: 'panel-foot'}, helper('Preserve the substance. Review every important change.'), submit));
   form.addEventListener('submit', event => {event.preventDefault(); if (ui.documentStarting || activeDocumentJob(ui.document.job)) return; if (ui.document.text) {ui.documentReplacePrompt = true; render(); return;} busy(submit, () => startDocumentJob('generate'), 'Starting…');});
   if (ui.documentReplacePrompt) {
     const replace = button('Generate a replacement', () => busy(replace, () => startDocumentJob('generate'), 'Starting…'), 'small primary');
     form.append(el('div', {class: 'replace-notice'}, el('strong', {}, 'Replace the current document draft?'), helper('Download or copy any edits you want to keep. The current draft will be replaced only after the new generation succeeds; your source stays separate.'), el('div', {class: 'button-group'}, button('Keep current draft', () => {ui.documentReplacePrompt = false; render();}, 'small'), replace)));
   }
-  const output = el('section', {class: 'panel document-output', 'aria-label': 'Editable document result'}, panelHeading('Your document draft', 'Edit, review, and export the current text.', doc.result && badge(doc.result.provider === 'codex' ? 'Codex' : 'Offline rehearsal', doc.result.provider === 'codex' ? '' : 'amber')));
+  const output = el('section', {class: 'panel document-output', 'aria-label': 'Editable document result'}, panelHeading('Your document draft', 'Edit, review, and export the current text.', doc.result && badge(isLive(doc.result.provider) ? modelName(doc.result.provider) : 'Offline rehearsal', isLive(doc.result.provider) ? '' : 'amber')));
   const textCount = helper(`${doc.text.length.toLocaleString()} / 240,000 characters · Edits stay in this browser.`);
   const draft = el('textarea', {class: 'draft-editor document-editor', value: doc.text, rows: 22, maxlength: DOCUMENT_OUTPUT_LIMIT, readonly: generating, 'aria-label': 'Edit your document draft', placeholder: 'Your whole-document draft will appear here. You can also paste an existing revision to check against the source.', onInput: event => {changeDocument({text: event.target.value}); textCount.textContent = `${event.target.value.length.toLocaleString()} / 240,000 characters · Edits stay in this browser.`;}});
   guardDocumentPaste(draft, DOCUMENT_OUTPUT_LIMIT);
@@ -793,7 +798,7 @@ function renderDocumentWrite() {
     el('div', {class: 'document-review', id: 'document-review'}, documentReviewContents()));
   output.append(el('div', {class: 'evidence', id: 'document-evidence', hidden: !doc.result}, documentEvidenceContents()));
   const pieces = [pageHeading('Writing / whole documents', 'Keep the substance. Find your voice.', 'Rewrite a complete document in context, then inspect content and voice separately.')];
-  if (state.settings.provider !== 'codex') pieces.push(callout('Offline rehearsal', 'This walkthrough uses simple text rules. Content and voice are not substantively checked, and the result does not demonstrate learned writing quality.', 'warning'));
+  if (!isLive()) pieces.push(callout('Offline rehearsal', 'This walkthrough uses simple text rules. Content and voice are not substantively checked, and the result does not demonstrate learned writing quality.', 'warning'));
   pieces.push(el('div', {id: 'document-storage-error', class: 'inline-error', hidden: !ui.documentStorageError}, 'Browser storage is unavailable or full. Download your source and edited draft before refreshing or closing this page.'), el('div', {id: 'document-job-status', role: 'status', 'aria-live': 'polite'}, documentJobContents()), el('div', {class: 'write-layout document-layout'}, form, output), el('p', {class: 'helper local-draft-note'}, 'Source, context, output and the current request ID stay in this browser. Nothing becomes an authored sample, lesson or quality vote automatically. Review before using the document.'));
   return pieces;
 }
@@ -801,7 +806,7 @@ function renderMessageWrite() {
   const context = contextEditor(ui.context, { scenario: false });
   const brief = el('textarea', { class: 'write-brief', placeholder: 'What do you want to say? Paste the message you’re answering, describe the facts, or start with a rough draft.', required: true, maxlength: 15000, value: ui.brief, disabled: ui.generating, onInput: event => { ui.brief = event.target.value; persistEditor(); } });
   const adjustments = draftControls(ui.controls, value => { ui.controls = value; persistEditor(); });
-  const submit = button(ui.generating ? 'Writing…' : state.settings.provider === 'codex' ? 'Draft this message' : 'Preview a rehearsal draft', null, 'primary', 'write'); submit.type = 'submit'; submit.disabled = ui.generating;
+  const submit = button(ui.generating ? 'Writing…' : isLive() ? 'Draft this message' : 'Preview a rehearsal draft', null, 'primary', 'write'); submit.type = 'submit'; submit.disabled = ui.generating;
   const form = el('form', { class: 'panel' }, panelHeading('What are you trying to say?', 'Start with a real message. Samples are optional.'), el('div', { class: 'panel-body' }, field('Your message or rough draft', brief), context.node, details('Adjust this draft', adjustments)), el('div', { class: 'panel-foot' }, helper('Review the facts and wording before sending.'), submit));
   form.addEventListener('submit', event => { event.preventDefault();
     if (draftHasEdits() || ui.rememberDraft) { ui.replacePrompt = true; render(); return; }
@@ -811,7 +816,7 @@ function renderMessageWrite() {
     const replace = button('Replace with a new draft', () => busy(replace, generateCurrentDraft, 'Writing…'), 'small primary');
     form.append(el('div', {class: 'replace-notice'}, el('strong', {}, 'Replace your current edited draft?'), helper('Your edits and any unsaved memory preview will be replaced only after the new draft succeeds. Copy anything you want to keep first.'), el('div', {class: 'button-group'}, button('Keep editing this draft', () => { ui.replacePrompt = false; render(); }, 'small'), replace)));
   }
-  const output = el('section', { class: 'panel', 'aria-label': 'Editable draft result' }, panelHeading('Your draft', ui.draft ? 'Edit the text. Decide separately what to remember.' : 'A useful first draft, then your finishing touch.', ui.draft && badge(ui.draft.provider === 'codex' ? 'Codex' : 'Offline heuristic', ui.draft.provider === 'codex' ? '' : 'amber')));
+  const output = el('section', { class: 'panel', 'aria-label': 'Editable draft result' }, panelHeading('Your draft', ui.draft ? 'Edit the text. Decide separately what to remember.' : 'A useful first draft, then your finishing touch.', ui.draft && badge(isLive(ui.draft.provider) ? modelName(ui.draft.provider) : 'Offline heuristic', isLive(ui.draft.provider) ? '' : 'amber')));
   if (ui.draft) {
     const draftEditor = el('textarea', {class: 'draft-editor', value: ui.editedDraft, maxlength: 30000, rows: 12, 'aria-label': 'Edit your draft', readonly: ui.generating || Boolean(ui.rememberDraft)});
     const editStatus = helper(ui.draft.teaching_baseline && !draftHasTeachingChanges() ? (ui.draft.teaching_baseline_reason === 'dismissed' ? 'Current edits kept for this message only.' : ui.draft.teaching_baseline_reason === 'undone' ? 'Your draft edit remains. The remembered lesson was undone.' : 'This correction was remembered. Future edits stay separate.') : draftHasEdits() ? 'Edited by you. These changes have not been remembered.' : 'Generated draft. Editing alone teaches nothing.');
@@ -829,7 +834,7 @@ function renderMessageWrite() {
   } else output.append(el('div', { class: 'draft-empty' }, icon('feather'), el('h3', {}, 'Write first. Teach as you go.'), el('p', {}, 'Describe a real message on the left. Edit the result naturally. You can ask it to remember a useful correction when one appears.')), el('div', {class: 'evidence'}, helper(`${plural(activeLanguageLessons().length, 'active language lesson')} · ${plural(state.feedback.length, 'saved choice')} · samples optional`)));
   const right = el('div', {class: 'primary-column'}, output, ui.rememberDraft && correctionRememberPanel());
   const pieces = [pageHeading('Writing / a useful draft, a considered correction', 'Write it. Make it yours.', 'Use a draft today. Teach a preference only when you have something worth remembering.')];
-  if (state.settings.provider !== 'codex') pieces.push(el('div', {style: 'margin-bottom: 21px'}, callout('Offline rehearsal', 'This mode uses simple text rules, not a language model. Your explicitly saved lessons persist; rehearsal drafts cannot demonstrate improved writing quality.', 'warning')));
+  if (!isLive()) pieces.push(el('div', {style: 'margin-bottom: 21px'}, callout('Offline rehearsal', 'This mode uses simple text rules, not a language model. Your explicitly saved lessons persist; rehearsal drafts cannot demonstrate improved writing quality.', 'warning')));
   if (ui.editorStorageError) pieces.push(el('div', {class: 'inline-error'}, 'Browser storage is unavailable. Copy your draft before refreshing or closing this page.'));
   pieces.push(el('div', {class: 'write-layout'}, form, right), el('p', {class: 'helper local-draft-note'}, 'Drafts, edits, and unsaved memory previews stay in this browser across navigation and refresh. Copying, editing, and adjusting controls never teach a lesson by themselves.'), correctionsHistoryPanel());
   return pieces;
@@ -901,9 +906,32 @@ function renderProfile() {
   const preferenceBody = preferences.length ? preferences.slice().reverse().map(preference => el('article', { class: 'preference' }, contextPills(typeof preference.context === 'object' ? preference.context : { channel: preference.context || 'work' }), preference.focus && el('div', {style: 'margin-top: 8px'}, badge(`${practiceFocuses[preference.focus]?.label || preference.focus} practice`, 'muted')), preference.notes && el('p', {}, preference.notes), Object.keys(preference.presentation || {}).length > 0 && el('dl', {}, Object.entries(preference.presentation).map(([key, value]) => el('div', {}, el('dt', {}, (presentationOptions[key]?.[0] || key) + ':'), el('dd', {}, asText(value))))), preference.edited_text && details('Your feedback rewrite', el('p', { style: 'white-space: pre-wrap' }, preference.edited_text)), !preference.notes && !Object.keys(preference.presentation || {}).length && !preference.edited_text && el('p', {}, preference.choice === 'neither' ? 'Rejected both alternatives for this context.' : `Preferred option ${asText(preference.choice).toUpperCase()} for this context.`))) : empty('Tell it what feels right.', 'A preferred phrase, an unwanted sign-off, or a choice of bullets over prose all give your profile useful direction.', button('Start a practice round', () => navigate('practice'), 'small', 'arrow'), 'practice');
   const preferencePanel = el('section', { class: 'panel' }, panelHeading('Preferences, in context', 'Your choices and reasons, kept separate from authored evidence.'), el('div', { class: 'panel-body' }, preferenceBody));
   const coverage = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Context coverage'), coverageMap.size ? [...coverageMap].map(([channel, counts]) => el('div', { class: 'coverage-row' }, el('strong', {}, channel || 'work'), el('span', {}, `${plural(counts.lessons, 'lesson')} · ${plural(counts.samples, 'sample')}`))) : helper('Teach a language preference in any context to start. Work, personal, community, and labels you create stay distinct.'));
-  const provider = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Generation provider'), providerPill(), el('p', { class: 'export-note' }, state.settings.provider === 'codex' ? `Using your local Codex CLI${state.settings.model ? ` with ${state.settings.model}` : ''}. Selected evidence and your brief are sent to the configured model when you generate.` : 'Offline mode rehearses the workflow with deterministic rules. No language model is running. The README explains how to start with the Codex provider.'), helper(state.capabilities?.codex_available ? 'Codex CLI detected. Authentication is verified only when generation succeeds.' : 'Codex CLI availability has not been confirmed by the server.'));
-  return [pageHeading('Voice profile / evidence, not a score', 'A voice that keeps its context.', 'See what you’ve contributed, what you’ve explicitly preferred, and where there is more to learn.'), stats, el('div', { class: 'layout confidence-layout' }, confidencePanel(), el('div', { class: 'primary-column' }, languageLessonPanel(), preferencePanel, patternPanel, priorPanel()), el('aside', { class: 'aside-column' }, exportPanel(), storyEnginePanel(), coverage, provider, el('div', { class: 'aside-note' }, el('h3', {}, 'A profile, not a personality verdict.'), el('p', {}, 'This is a portable collection of evidence and preferences. Coverage grows with your contributions; a completion or XP count never establishes writing accuracy.'))))];
+  const provider = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Generation provider'), providerPill(), el('p', { class: 'export-note' }, isLive() ? `Using ${state.settings.provider === 'anthropic' ? 'the Anthropic API' : 'your local Codex CLI'}${state.settings.model ? ` with ${state.settings.model}` : ''}. Selected evidence and your brief are sent to the configured model when you generate.` : 'Offline mode rehearses the workflow with deterministic rules. No language model is running. The README explains how to start with the Codex or Anthropic provider.'), helper(state.settings.provider === 'anthropic' ? (state.capabilities?.provider_available ? 'An API key is present in the server environment. It is never shown here; access is verified only when generation succeeds.' : 'ANTHROPIC_API_KEY is not set for the server process.') : state.capabilities?.codex_available ? 'Codex CLI detected. Authentication is verified only when generation succeeds.' : 'Codex CLI availability has not been confirmed by the server.'));
+  return [pageHeading('Voice profile / evidence, not a score', 'A voice that keeps its context.', 'See what you’ve contributed, what you’ve explicitly preferred, and where there is more to learn.'), stats, el('div', { class: 'layout confidence-layout' }, confidencePanel(), el('div', { class: 'primary-column' }, proposalPanel(), languageLessonPanel(), preferencePanel, patternPanel, priorPanel()), el('aside', { class: 'aside-column' }, exportPanel(), storyEnginePanel(), coverage, provider, el('div', { class: 'aside-note' }, el('h3', {}, 'A profile, not a personality verdict.'), el('p', {}, 'This is a portable collection of evidence and preferences. Coverage grows with your contributions; a completion or XP count never establishes writing accuracy.'))))];
 }
+function proposalPanel() {
+  const proposals = state.lesson_proposals || [];
+  if (!proposals.length) return null;
+  const decide = (proposal, decision, control) => busy(control, async () => {
+    await api(`/lesson-proposals/${encodeURIComponent(proposal.id)}/${decision}`, 'POST', {});
+    await refresh();
+    toast(decision === 'accept' ? 'Lesson saved for its context.' : 'Proposal dismissed. Nothing was saved.');
+  });
+  const items = proposals.map(proposal => {
+    const lesson = proposal.lesson;
+    const accept = button('Save as lesson', null, 'primary small');
+    const dismiss = button('Dismiss', null, 'small');
+    accept.addEventListener('click', () => decide(proposal, 'accept', accept));
+    dismiss.addEventListener('click', () => decide(proposal, 'dismiss', dismiss));
+    const lines = [['Guidance', lesson.guidance], ['Prefer', lesson.preferred], ['Avoid', lesson.avoided], ['Why the assistant suggested it', proposal.rationale]].filter(([, value]) => value);
+    const change = (proposal.before || proposal.after) && details('The correction it came from', el('div', {}, proposal.before && el('p', { class: 'helper' }, `Before: ${proposal.before}`), proposal.after && el('p', { class: 'helper' }, `After: ${proposal.after}`)));
+    return el('article', { class: 'preference' }, el('div', { class: 'section-title' }, `${lesson.dimension} · from ${proposal.source}`), contextPills(lesson.context),
+      ...lines.map(([label, value]) => el('p', {}, el('strong', {}, `${label}: `), value)), change || null,
+      el('div', { class: 'proposal-actions' }, accept, dismiss));
+  });
+  return el('section', { class: 'panel' }, panelHeading('Proposed lessons', 'Suggested by a connected assistant. Nothing changes until you save one.', badge(`${proposals.length} waiting`, 'amber')), el('div', { class: 'panel-body' }, items));
+}
+
 function exportPanel() {
   const include = input({ type: 'checkbox', checked: ui.includeExamples, onChange: event => { ui.includeExamples = event.target.checked; ui.exportText = ''; preview.replaceChildren(); } });
   const preview = el('div', {});
@@ -1002,7 +1030,7 @@ function renderEvaluate() {
     }});
     const context = contextEditor(ui.qualityForm.context || selected.context, {remember: false, onChange: value => { ui.qualityForm.context = value; persistEditor(); }});
     const brief = el('textarea', {required: true, rows: 4, maxlength: 15000, value: ui.qualityForm.brief || '', placeholder: 'Use a new message with the same kind of recipient or purpose. Supply the facts both drafts must preserve; do not paste your previous correction as the answer.', onInput: event => { ui.qualityForm.brief = event.target.value; persistEditor(); }});
-    const submit = button(state.settings.provider === 'codex' ? 'Check this correction blind' : 'Rehearse this correction check', null, 'primary', 'arrow'); submit.type = 'submit';
+    const submit = button(isLive() ? 'Check this correction blind' : 'Rehearse this correction check', null, 'primary', 'arrow'); submit.type = 'submit';
     const setup = el('form', {class: 'panel'}, panelHeading('Did this correction actually help?', 'Try it on a new brief. The two drafts differ only in whether this correction is included.'), el('div', {class: 'panel-body'}, field('Remembered correction', correction), helper(selected.guidance), el('p', {class: 'scope-summary'}, correctionScopeSummary(selected.context, selected.scope)), field('A new message to write', brief), context.node), el('div', {class: 'panel-foot'}, helper('Without / with labels stay hidden until you rate both.'), submit));
     setup.addEventListener('submit', event => { event.preventDefault(); busy(submit, async () => {
       if (!brief.value.trim()) throw new Error('Give the check a new message and its facts.');
@@ -1018,7 +1046,7 @@ function renderEvaluate() {
   const wholeVoice = details('Compare your whole voice profile', el('div', {class: 'whole-voice-evaluation'}, helper('Compare the full calibrated profile with a baseline. These judgments inform voice confidence readiness and stay separate from correction checks.'), renderWholeVoiceEvaluation()), ui.wholeVoiceOpen);
   wholeVoice.addEventListener('toggle', () => { ui.wholeVoiceOpen = wholeVoice.open; });
   column.append(el('section', {class: 'panel panel-pad', id: 'whole-voice-comparison'}, wholeVoice));
-  return [pageHeading('Check fit / one correction at a time', 'Keep the changes that help.', 'Compare a saved correction on a new message. Judge which needs less work and whether both preserve the meaning.'), state.settings.provider !== 'codex' && el('div', {style: 'margin-bottom: 20px'}, callout('Offline checks are rehearsals', 'Both versions use deterministic rules. Ratings are kept separately and do not count as evidence that an AI model improved.', 'warning')), column];
+  return [pageHeading('Check fit / one correction at a time', 'Keep the changes that help.', 'Compare a saved correction on a new message. Judge which needs less work and whether both preserve the meaning.'), !isLive() && el('div', {style: 'margin-bottom: 20px'}, callout('Offline checks are rehearsals', 'Both versions use deterministic rules. Ratings are kept separately and do not count as evidence that an AI model improved.', 'warning')), column];
 }
 function qualityCheckPanel(item, nested = false) {
   const rated = item.status !== 'unrated';
@@ -1053,7 +1081,7 @@ function qualityCheckPanel(item, nested = false) {
   for (const [value, label] of [['tie', 'Both fit equally'], ['neither', 'Neither fits']]) { const control = button(label, () => updateChoice(value), `small ${draft.choice === value ? 'selected' : ''}`); control.setAttribute('aria-pressed', String(draft.choice === value)); chooseButtons.push([value, control]); alternatives.append(control); }
   const notes = el('textarea', {rows: 2, maxlength: 2000, value: draft.notes, placeholder: 'What helped, hurt, or changed the meaning?', onInput: event => { draft.notes = event.target.value; persistEditor(); }});
   body.append(alternatives, el('div', {style: 'margin-top: 16px'}, field('A note about your judgment', notes, 'optional')));
-  const form = el('form', {class: 'panel'}, panelHeading('Which version would you use?', 'Rate the meaning and editing effort of both, then choose a version, tie, or neither.', badge(item.provider === 'codex' ? 'Blind AI check' : 'Offline rehearsal', item.provider === 'codex' ? '' : 'amber')), body, el('div', {class: 'panel-foot'}, helper('These ratings evaluate the correction. They do not train new preferences.'), submit));
+  const form = el('form', {class: 'panel'}, panelHeading('Which version would you use?', 'Rate the meaning and editing effort of both, then choose a version, tie, or neither.', badge(isLive(item.provider) ? 'Blind AI check' : 'Offline rehearsal', isLive(item.provider) ? '' : 'amber')), body, el('div', {class: 'panel-foot'}, helper('These ratings evaluate the correction. They do not train new preferences.'), submit));
   form.addEventListener('submit', event => { event.preventDefault(); busy(submit, async () => {
     if (!draft.choice) throw new Error('Choose A, B, both, or neither.');
     if (!draft.meaning.a || !draft.meaning.b || !draft.effort.a || !draft.effort.b) throw new Error('Rate meaning and editing effort for both A and B.');
@@ -1067,8 +1095,8 @@ function renderWholeVoiceEvaluation() {
   const summary=state.evaluation_summary || {};
   const context=contextEditor(ui.context,{scenario:true});
   const brief=el('textarea',{required:true,maxlength:15000,rows:4,placeholder:'Give both versions the same facts and desired outcome. Do not paste held-out answer text.', 'aria-label':'Comparison brief'});
-  const submit=button(state.settings.provider==='codex'?'Create a blind comparison':'Rehearse a blind comparison',null,'primary');submit.type='submit';
-  const setup=el('form',{class:'panel'},panelHeading('Does calibration actually help?','Compare a baseline and your calibrated voice before seeing which is which.'),el('div',{class:'panel-body'},context.node,field('Same brief for both drafts',brief),helper('Both versions use the same model and controls. Evaluation votes stay separate from training.')),el('div',{class:'panel-foot'},helper(state.settings.provider==='codex'?'Generates two drafts through Codex.':'Offline rehearsals do not count as evidence of AI quality.'),submit));
+  const submit=button(isLive()?'Create a blind comparison':'Rehearse a blind comparison',null,'primary');submit.type='submit';
+  const setup=el('form',{class:'panel'},panelHeading('Does calibration actually help?','Compare a baseline and your calibrated voice before seeing which is which.'),el('div',{class:'panel-body'},context.node,field('Same brief for both drafts',brief),helper('Both versions use the same model and controls. Evaluation votes stay separate from training.')),el('div',{class:'panel-foot'},helper(isLive()?`Generates two drafts through ${providerPhrase()}.`:'Offline rehearsals do not count as evidence of AI quality.'),submit));
   setup.addEventListener('submit',event=>{event.preventDefault();busy(submit,async()=>{await api('/evaluations','POST',{context:context.get(),brief:brief.value.trim()});await refresh();toast('Comparison ready. The labels are hidden until you vote.');},'Comparing…');});
   const cases=el('div',{class:'primary-column'});
   for(const item of (state.evaluations || []).filter(x=>x.status==='unrated')) {
@@ -1083,10 +1111,10 @@ function renderWholeVoiceEvaluation() {
     const options=el('div',{class:'round-options'});
     for(const option of item.options){const b=el('button',{type:'button',class:'option','aria-pressed':'false',onClick:()=>choose(option.id)},el('span',{class:'option-letter'},option.id.toUpperCase()),el('span',{class:'option-text'},option.text));buttons.push([option.id,b]);options.append(b);}
     const alternate=el('div',{class:'button-group'});for(const [v,label]of [['tie','Both fit equally'],['neither','Neither fits']]){const b=button(label,()=>choose(v),'small');buttons.push([v,b]);alternate.append(b);}
-    cases.append(el('section',{class:'panel'},panelHeading('Which would you send with fewer changes?',item.brief,badge(item.provider==='codex'?'Blind comparison':'Rehearsal','muted')),el('div',{class:'panel-body'},contextPills(item.context),options,alternate,field('Optional evaluation note',notes),el('label',{class:'checkbox'},factual,el('span',{},'One or both drafts change facts or commitments.'))),el('div',{class:'panel-foot'},helper('Names are revealed after your judgment is recorded.'),save)));
+    cases.append(el('section',{class:'panel'},panelHeading('Which would you send with fewer changes?',item.brief,badge(isLive(item.provider)?'Blind comparison':'Rehearsal','muted')),el('div',{class:'panel-body'},contextPills(item.context),options,alternate,field('Optional evaluation note',notes),el('label',{class:'checkbox'},factual,el('span',{},'One or both drafts change facts or commitments.'))),el('div',{class:'panel-foot'},helper('Names are revealed after your judgment is recorded.'),save)));
   }
   const history=(state.evaluations||[]).filter(x=>x.status!=='unrated');
-  const results=el('section',{class:'panel panel-pad'},el('h2',{},'Your observed results'),helper(`${summary.rated_real||0} rated AI comparisons · ${summary.calibrated_wins||0} calibrated wins · ${summary.baseline_wins||0} baseline wins · ${summary.ties||0} ties · ${summary.neither||0} neither`),helper(`${summary.factual_flags||0} factual concerns · ${summary.rated_offline||0} rated rehearsals excluded from AI results`),helper('These are your judgments on these tasks, not a universal accuracy percentage.'),history.slice(0,8).map(x=>el('article',{class:'preference'},contextPills(x.context),el('p',{},`${x.provider==='codex'?'AI':'Rehearsal'} · ${x.result} · A: ${x.mapping?.a} / B: ${x.mapping?.b}`),x.notes&&helper(x.notes))));
+  const results=el('section',{class:'panel panel-pad'},el('h2',{},'Your observed results'),helper(`${summary.rated_real||0} rated AI comparisons · ${summary.calibrated_wins||0} calibrated wins · ${summary.baseline_wins||0} baseline wins · ${summary.ties||0} ties · ${summary.neither||0} neither`),helper(`${summary.factual_flags||0} factual concerns · ${summary.rated_offline||0} rated rehearsals excluded from AI results`),helper('These are your judgments on these tasks, not a universal accuracy percentage.'),history.slice(0,8).map(x=>el('article',{class:'preference'},contextPills(x.context),el('p',{},`${isLive(x.provider)?'AI':'Rehearsal'} · ${x.result} · A: ${x.mapping?.a} / B: ${x.mapping?.b}`),x.notes&&helper(x.notes))));
   return [pageHeading('Evaluation / fewer edits, better fit','Check whether it sounds more like you.','Judge comparable drafts blind, then inspect what helped.'),el('div',{class:'primary-column'},cases,setup,results)];
 }
 

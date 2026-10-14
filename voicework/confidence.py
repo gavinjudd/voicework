@@ -4,6 +4,7 @@ Consumes public records only. The summary exposes counts and context coverage,
 not sample text, generated options, or a blinded candidate's mapping.
 """
 from .learning import CONTEXT_FIELDS
+from .provider import LIVE_PROVIDERS
 
 
 def _normalize(value):
@@ -33,7 +34,7 @@ def _has_preference(item):
 
 
 def build_voice_confidence(samples, feedback, language_lessons=(), evaluations=(), quality_checks=()):
-    """Summarize current evidence and historical rated Codex observations.
+    """Summarize current evidence and historical rated live-model observations.
 
     Distinct situations use all declared context fields plus the brief, with
     case and whitespace normalized. Repeating a case does not add breadth.
@@ -51,7 +52,7 @@ def build_voice_confidence(samples, feedback, language_lessons=(), evaluations=(
         "channels": sorted({channel for item in authored + preferences + lessons
                             for channel in [_channel(item)] if channel}),
     }
-    rated = [item for item in evaluations if item.get("provider") == "codex" and item.get("status") == "rated"]
+    rated = [item for item in evaluations if item.get("provider") in LIVE_PROVIDERS and item.get("status") == "rated"]
     covered = [item for item in rated if _channel(item) and _normalize(item.get("brief"))]
     cases = {tuple(_normalize(item.get("context", {}).get(field)) for field in CONTEXT_FIELDS)
              + (_normalize(item["brief"]),) for item in covered}
@@ -64,7 +65,7 @@ def build_voice_confidence(samples, feedback, language_lessons=(), evaluations=(
         "factual_flags": sum(item.get("factual_issue") is True for item in rated),
         "distinct_briefs": len(cases),
         "channels": sorted({_channel(item) for item in covered}),
-        "correction_checks": sum(item.get("provider") == "codex" and item.get("status") == "rated"
+        "correction_checks": sum(item.get("provider") in LIVE_PROVIDERS and item.get("status") == "rated"
                                  for item in quality_checks),
     }
     saved = bool(authored or preferences or lessons)
@@ -75,7 +76,7 @@ def build_voice_confidence(samples, feedback, language_lessons=(), evaluations=(
          "detail": "%d unique authored samples, %d saved practice preferences, %d active lessons."
                    % (evidence["authored_samples"], evidence["feedback"], evidence["lessons"])},
         {"id": "comparison", "label": "Blind voice comparison", "complete": compared,
-         "detail": "%d rated Codex comparisons: %d calibrated picks, %d baseline picks, %d ties, %d neither; %d factual flags."
+         "detail": "%d rated live-model comparisons: %d calibrated picks, %d baseline picks, %d ties, %d neither; %d factual flags."
                    % (validation["rated_real"], validation["calibrated_wins"], validation["baseline_wins"],
                       validation["ties"], validation["neither"], validation["factual_flags"])},
         {"id": "contexts", "label": "Checks across contexts", "complete": across_contexts,
@@ -93,8 +94,8 @@ def build_voice_confidence(samples, feedback, language_lessons=(), evaluations=(
         "note": "This tracks evidence readiness, not measured writing accuracy. Ratings are historical observations and do not validate the current profile. Correction checks assess individual lessons separately.",
         "next_step": (
             "Save a writing preference or lesson, or confirm an authored sample.",
-            "Run and rate a blind voice comparison using Codex.",
-            "Rate fresh Codex comparisons until you have at least three distinct situations across two known channels.",
+            "Run and rate a blind voice comparison with a live model provider.",
+            "Rate fresh live-model comparisons until you have at least three distinct situations across two known channels.",
             "Review the comparison outcomes, refine saved guidance, and compare fresh situations again.",
         )[completed],
     }

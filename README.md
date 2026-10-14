@@ -38,6 +38,17 @@ python3 -m voicework --provider offline
 
 Offline mode is explicitly labeled **rehearsal**. It persists lessons, review and calibration feedback, but uses simple text transformations and fixed comparison contrasts instead of an AI. It does not semantically apply language lessons or demonstrate personalized writing quality. There is no silent fallback from Codex to offline.
 
+### Anthropic API provider
+
+As an alternative to the Codex CLI, generate through the Anthropic Messages API:
+
+```sh
+export ANTHROPIC_API_KEY=...        # read from the environment per request; never stored, logged or sent to the browser
+python3 -m voicework --provider anthropic --model claude-opus-5-5
+```
+
+The adapter uses only the standard library. It forces one structured tool call whose input schema is the same strict schema the Codex path uses, offers no other tools, refuses redirects, rejects truncated (`max_tokens`) responses, and never echoes an error body. `VOICEWORK_ANTHROPIC_URL` can point to another HTTPS endpoint (plain HTTP only on loopback, for tests). Records keep the exact provider that produced them (`codex` or `anthropic`), and both count as live results; offline stays rehearsal. Opening an existing database once widens the stored provider constraint on the evaluation tables in place, keeping every existing row unchanged. A live Anthropic call has not been recorded in [VERIFICATION.md](docs/VERIFICATION.md) yet; the adapter is covered by tests against a loopback fake API.
+
 ## First useful session
 
 1. **Write and edit:** describe a real situation, generate a draft, and edit the result directly. Copy uses the edited text. Edits and intensity controls affect this draft only; they do not automatically train the profile.
@@ -98,13 +109,60 @@ To check an edited result without rewriting, include `text` alongside the origin
 
 The same interface is available through `POST /api/documents`, `POST /api/document-checks`, and polling `GET /api/documents/:id`. Jobs run in memory, survive browser refresh, and disappear on server restart; copy/download results you need to keep. Completed jobs expire after one hour or when evicted from the bounded result cache. See [BUILD_CONTRACT.md](docs/BUILD_CONTRACT.md).
 
-Context analysis uses offline heuristics or the selected Codex provider and returns a reviewable preview. Prior packets store background or guidance, never authentic writing. Blinded evaluation is a separate lane: both drafts receive the same brief and neutral controls, while only the calibrated draft receives approved examples, preferences, active contextual lessons and confirmed priors. Ratings are immutable and excluded from learning. Counts include baseline wins, calibrated wins, ties, neither and factual flags by channel; offline comparisons are counted separately as rehearsal. Preference counts do not establish achieved writing accuracy or factual correctness.
+Context analysis uses offline heuristics or the selected live provider (Codex or Anthropic) and returns a reviewable preview. Prior packets store background or guidance, never authentic writing. Blinded evaluation is a separate lane: both drafts receive the same brief and neutral controls, while only the calibrated draft receives approved examples, preferences, active contextual lessons and confirmed priors. Ratings are immutable and excluded from learning. Counts include baseline wins, calibrated wins, ties, neither and factual flags by channel; offline comparisons are counted separately as rehearsal. Preference counts do not establish achieved writing accuracy or factual correctness.
 
 Correction quality checks answer a narrower question: does this particular saved correction help? Both variants receive the same current evidence and other preferences; only the selected correction differs. Generation order and display labels are randomized. The saved case records the model, controls and fingerprints of the fixed inputs. This is not a replay of an entire historical profile. Voice choice, meaning judgments and expected editing effort remain separate, and offline checks never count as real-model results. Use multiple fresh situations before drawing a conclusion; one favorable comparison does not establish improvement.
 
 A generated draft lists the examples supplied to the model. These IDs explain retrieval, not a claim that a particular sentence came from a particular source. Strong controls are guidance to the model, not a verified factuality guarantee; review important drafts before using them.
 
 [PRODUCT.md](docs/PRODUCT.md) separates the implemented workflow from future source grouping, independent fact verification, prompt optimization and weight training. [RESEARCH.md](docs/RESEARCH.md) records the source-backed research and reuse decisions.
+
+## Use your voice inside Claude, Codex or Cursor (MCP)
+
+`python3 -m voicework.mcp` is a local [Model Context Protocol](https://modelcontextprotocol.io) server over stdio, using only the standard library. It reads the same database as the app (the app does not need to be running) and does not call a model.
+
+| Tool | What it does |
+| --- | --- |
+| `list_voice_contexts` | Channels with reviewed evidence and their counts |
+| `get_voice_guidance` | The context-matched lessons, practice reasons and presentation preferences a Voicework draft would use for a situation. Authored excerpts (`include_examples`) and confirmed priors (`include_priors`) are opt-in per call |
+| `get_story_voice` | A Story Engine voice file for chosen channels |
+| `propose_lesson` | Queues a suggested lesson after you correct an assistant's wording. **It changes nothing** until you accept it under **Voice profile → Proposed lessons** (max 50 pending) |
+
+Register it with your client. `scripts/voicework_mcp.py` works from any directory; `--data-dir` defaults to this repository's `data/`.
+
+```sh
+# Claude Code
+claude mcp add voicework -- python3 /path/to/voicework/scripts/voicework_mcp.py
+```
+
+```jsonc
+// Claude Desktop (claude_desktop_config.json), Cursor (.cursor/mcp.json) and similar
+{"mcpServers": {"voicework": {"command": "python3", "args": ["/path/to/voicework/scripts/voicework_mcp.py"]}}}
+```
+
+```toml
+# Codex (~/.codex/config.toml)
+[mcp_servers.voicework]
+command = "python3"
+args = ["/path/to/voicework/scripts/voicework_mcp.py"]
+```
+
+Guidance carries the same boundaries as an export: it is style evidence, not facts, a measured match or proof of authorship. Whatever a tool returns is sent to the client's model, so excerpts and priors stay off unless a call asks for them.
+
+## Check whether calibration helps: evaluation panels
+
+A panel is a fixed set of real situations you will actually write, balanced across channels. Each run turns every item into an ordinary blind baseline-vs-calibrated comparison that you rate on **Check fit → Compare your whole voice profile**. The report breaks results down by channel and by run, so you can repeat the same panel after a defined batch of corrections and compare.
+
+```sh
+cp docs/examples/panel-template.json my-panel.json      # replace the synthetic items with real situations
+python3 -m voicework.panel create my-panel.json
+python3 -m voicework.panel run baseline-2026-10 --provider anthropic --label before
+#   ...rate the comparisons in the app, teach and correct for a while...
+python3 -m voicework.panel run baseline-2026-10 --provider anthropic --label after-batch-1
+python3 -m voicework.panel report baseline-2026-10
+```
+
+Creating a panel refuses a brief that duplicates or heavily overlaps a confirmed, non-held-out sample, because the calibrated draft would receive that sample as an example; mark it held out or rewrite the brief. Panels are frozen once created. Each run records counts and a hash of what the profile contained, never sample text. Failed items can be finished with `--resume`. Offline runs are labelled rehearsal. A small panel gives a direction, not an accuracy rate.
 
 ## Tell stories in your voice (Story Engine)
 
@@ -138,8 +196,10 @@ python3 -m compileall -q voicework
 node --check web/app.js
 node --check extension/popup.js
 node --check extension/background.js
-node --test tests/test_browser_discovery.js tests/test_correction_diff.js tests/test_voice_confidence.js tests/test_document_state.js
+node --test tests/*.js
 ```
+
+GitHub Actions runs the same checks on Python 3.9 and 3.14 (`.github/workflows/checks.yml`). Discovery tests use the system temporary folder; a temp path under a blocked folder name (such as `sessions/`) makes them fail by design, so set `TMPDIR=/tmp` there.
 
 Node is optional for syntax checks, not required to run the app. See [BUILD_CONTRACT.md](docs/BUILD_CONTRACT.md) for the API and [AGENTS.md](AGENTS.md) for repository development rules.
 
