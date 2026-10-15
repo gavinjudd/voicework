@@ -97,5 +97,34 @@ class LongformLessonTests(unittest.TestCase):
         self.assertIn("current brief and explicit register still govern", prompt)
 
 
+class PersonalWebsiteTests(unittest.TestCase):
+    """The writer's own site gets broad long-form defaults, never texting evidence."""
+
+    def test_site_aliases_share_one_channel_and_inherit_broad_lessons(self):
+        item = broad()
+        for channel in ("personal website", "Personal Site", "personal website copy",
+                        "portfolio website", "portfolio site"):
+            with self.subTest(channel=channel):
+                self.assertEqual(matching_lessons([item], {"channel": channel}), [item])
+        for channel in ("website", "company website", "website copy", "site copy", "marketing site"):
+            with self.subTest(channel=channel):
+                self.assertEqual(matching_lessons([item], {"channel": channel}), [])
+
+    def test_personal_channel_lessons_and_samples_stay_out(self):
+        request = {"channel": "personal website", "audience": "people who follow me",
+                   "intent": "introduce myself"}
+        texting = broad(id="texting", context={"channel": "personal"})
+        self.assertEqual(matching_lessons([texting], request), [])
+        sample = {"id": "text", "status": "confirmed", "held_out": False,
+                  "text": "Synthetic text to a friend.", "context": {"channel": "personal"}}
+        self.assertEqual(retrieve([sample], request), [])
+        site_lesson = broad(id="site", context={"channel": "personal website"})
+        self.assertEqual(matching_lessons([site_lesson, texting], {**request, "channel": "portfolio site"}),
+                         [site_lesson])
+        prior = {"is_prior": True, "confirmed": True, "context": {"channel": "personal"}}
+        payload = _payload(request, [sample], [prior])
+        self.assertEqual(payload["assistant_derived_priors"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

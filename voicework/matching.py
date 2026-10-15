@@ -31,6 +31,10 @@ ALIAS_GROUPS = {
          "technical research article", "technical explainer"),
         ("personal text message", "personal text", "personal sms"),
         ("work email", "professional email", "business email"),
+        # The writer's own site: its pages, entries, captions and labels. A bare
+        # "website" stays literal, since company and marketing sites differ.
+        ("personal website", "personal site", "personal website copy", "portfolio website",
+         "portfolio site"),
     ),
     "audience": _PEOPLE + (("public", "general public", "public audience"),),
     "relationship": _PEOPLE + (
@@ -80,6 +84,7 @@ LONGFORM_LESSON_CHANNELS = frozenset({
     "long-form writing", "technical article", "article", "long-form article",
     "essay", "long-form essay", "reflective essay", "project article",
     "project case study", "case study", "blog post", "long-form blog post",
+    "personal website",
 })
 _WEIGHTS = {"audience": 5, "intent": 5, "relationship": 4, "stakes": 2}
 _HARD_FIELDS = {"audience", "relationship", "stakes"}

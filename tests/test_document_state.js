@@ -80,6 +80,12 @@ test('invalid persisted controls and context cannot extend supported values', ()
   assert.equal(restored.context.channel, 'work'); assert.equal(restored.context.audience, ''); assert.equal(restored.context.intent, 'request review');
   assert.equal(restored.controls.polish, 45); assert.equal(restored.controls.structure, 'auto'); assert.equal(restored.controls.register, 'auto'); assert.equal(restored.checkRevision, null);
 });
+test('document length control keeps only known values', () => {
+  assert.equal(d.emptyDocument().controls.length, 'auto');
+  assert.equal(d.cleanDocumentControls({length: 'preserve'}).length, 'preserve');
+  assert.equal(d.cleanDocumentControls({length: 'shorter'}).length, 'auto');
+  assert.equal(d.restoreDocument({...d.emptyDocument(), controls: {length: {html: 'x'}}}).controls.length, 'auto');
+});
 test('download names stay bounded and contain no path components', () => {
   assert.equal(d.documentDownloadName('Plan.md'), 'Plan-voicework.md');
   assert.equal(d.documentDownloadName('../folder/Plan.txt', 'txt'), '..folderPlan-voicework.txt');

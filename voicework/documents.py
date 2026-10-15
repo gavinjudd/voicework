@@ -291,8 +291,12 @@ def _link_targets(text):
     return targets
 
 
-def deterministic_checks(source, draft):
-    """Conservative source-relative alarms, not a factuality classifier."""
+def deterministic_checks(source, draft, length='auto'):
+    """Conservative source-relative alarms, not a factuality classifier.
+
+    ``length='preserve'`` is for short copy such as labels, captions and site
+    entries, where a section that grows noticeably is itself a finding.
+    """
     source_blocks, source_sections = parse_document(source)
     draft_blocks, draft_sections = parse_document(draft)
     issues = []
@@ -322,6 +326,8 @@ def deterministic_checks(source, draft):
                 issues.append(_issue('section_numbers_changed', 'Numeric details moved or changed within this section.', 'error', section['id']))
             if len(before.strip()) > 100 and len(after.strip()) < len(before.strip()) * .45:
                 issues.append(_issue('section_shortened', 'This section became much shorter; check for omitted reasoning or details.', 'warning', section['id']))
+            if length == 'preserve' and len(after.strip()) > len(before.strip()) * 1.25 + 12:
+                issues.append(_issue('section_lengthened', 'This section grew although length was set to preserve; check for added explanation or padding.', 'warning', section['id']))
     source_paragraphs = Counter(re.sub(r'\s+', ' ', b['text']).strip() for b in source_blocks if b['kind'] == 'prose')
     draft_paragraphs = Counter(re.sub(r'\s+', ' ', b['text']).strip() for b in draft_blocks if b['kind'] == 'prose')
     if any(len(p) >= 50 and count > max(1, source_paragraphs[p]) for p, count in draft_paragraphs.items()):
@@ -400,6 +406,8 @@ def _frozen_payload(payload, controls):
         raise ValueError('Document controls must be an object.')
     if controls.get('register', 'auto') not in ('auto', 'casual', 'professional', 'formal'):
         raise ValueError('Document register must be auto, casual, professional, or formal.')
+    if controls.get('length', 'auto') not in ('auto', 'preserve'):
+        raise ValueError('Document length must be auto or preserve.')
     frozen = copy.deepcopy(payload)
     frozen['controls'] = copy.deepcopy(controls)
     encoded = json.dumps(frozen, ensure_ascii=False, sort_keys=True)
@@ -411,7 +419,7 @@ def _frozen_payload(payload, controls):
 def review_document(provider, source, draft, frozen):
     validate_document_text(source)
     validate_document_text(draft, output=True)
-    issues = deterministic_checks(source, draft)
+    issues = deterministic_checks(source, draft, frozen.get('controls', {}).get('length', 'auto'))
     voice_issues, warnings = [], []
     has_voice = any(frozen.get(key) for key in ('authored_examples', 'calibration_feedback', 'language_lessons', 'assistant_derived_priors'))
     review = {'provider': provider.mode, 'status': 'not_checked', 'units_total': 0, 'units_completed': 0}

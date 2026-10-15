@@ -44,6 +44,19 @@ class DocumentApiTests(test_server.ServerTests):
         self.assertEqual(self.request('GET', '/api/documents/' + '0' * 36)[0], 404)
         self.assertEqual(self.request('POST', '/api/documents', {'source': 'test'}, headers={'X-Voicework-Token': 'wrong'})[0], 403)
 
+    def test_length_control_is_document_only_and_reaches_checks(self):
+        source = '# Labels\n\n## Cover\n\nThe long versions\n'
+        status, job, _ = self.request('POST', '/api/documents', {'source': source, 'context': {'channel': 'personal website'}, 'controls': {'length': 'preserve'}})
+        self.assertEqual(status, 202)
+        self.assertEqual(self.wait_job(job)['status'], 'complete')
+        grown = source.replace('The long versions', 'The long versions, written out properly for anyone who wants more')
+        status, job, _ = self.request('POST', '/api/document-checks', {'source': source, 'text': grown, 'context': {'channel': 'personal website'}, 'controls': {'length': 'preserve'}})
+        self.assertEqual(status, 202)
+        issues = self.wait_job(job)['result']['checks']['content']['issues']
+        self.assertIn('section_lengthened', {issue['code'] for issue in issues})
+        self.assertEqual(self.request('POST', '/api/documents', {'source': source, 'controls': {'length': 'shorter'}})[0], 400)
+        self.assertEqual(self.request('POST', '/api/draft', {'context': {'channel': 'work'}, 'brief': 'Synthetic brief.', 'controls': {'length': 'preserve'}})[0], 400)
+
     def test_job_freezes_selected_inputs_and_bounds_concurrency(self):
         gate = threading.Event()
         entered = threading.Event()

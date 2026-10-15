@@ -594,7 +594,10 @@ function draftControls(values, onChange, disabled = false) {
   }
   const structure = select([['auto', 'Use my preferences'], ['prose', 'Prose'], ['bullets', 'Bullets']], values.structure, {disabled, onChange: event => {values.structure = event.target.value; onChange({...values});}});
   const register = select([['auto', 'Fit the context'], ['casual', 'Casual'], ['professional', 'Professional'], ['formal', 'Formal']], values.register || 'auto', {disabled, onChange: event => {values.register = event.target.value; onChange({...values});}});
-  return el('div', {}, controls, el('div', {class: 'form-row'}, field('Structure', structure), field('Register', register)), helper('These controls affect this draft. They do not create remembered preferences or authorize new facts.'));
+  const row = el('div', {class: 'form-row'}, field('Structure', structure), field('Register', register));
+  // Documents only: short copy such as labels, captions and site entries can keep its length.
+  if ('length' in values) row.append(field('Length', select([['auto', 'Fit the rewrite'], ['preserve', 'Keep each part about as long']], values.length || 'auto', {disabled, onChange: event => {values.length = event.target.value; onChange({...values});}})));
+  return el('div', {}, controls, row, helper('These controls affect this draft. They do not create remembered preferences or authorize new facts.'));
 }
 function renderWrite() {
   const mode = el('div', {class: 'segmented write-mode', role: 'group', 'aria-label': 'Writing mode'}, [['message', 'Message'], ['document', 'Whole document']].map(([value, label]) => el('button', {type: 'button', class: `segment ${ui.writeMode === value ? 'active' : ''}`, 'aria-pressed': String(ui.writeMode === value), onClick: () => {ui.writeMode = value; persistDocument(); render();}}, label)));

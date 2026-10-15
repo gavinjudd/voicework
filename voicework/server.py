@@ -51,10 +51,11 @@ def _unique_object(pairs):
     return value
 
 
-def validate_controls(value):
+def validate_controls(value, document=False):
     if value is None:
         value = {}
-    if not isinstance(value, dict) or set(value) - {"polish", "detail", "warmth", "assertiveness", "structure", "register"}:
+    allowed = {"polish", "detail", "warmth", "assertiveness", "structure", "register"} | ({"length"} if document else set())
+    if not isinstance(value, dict) or set(value) - allowed:
         raise ValueError("Unknown draft control")
     controls = {}
     for key in ("polish", "detail", "warmth", "assertiveness"):
@@ -70,6 +71,11 @@ def validate_controls(value):
     if register not in ("auto", "casual", "professional", "formal"):
         raise ValueError("register must be auto, casual, professional, or formal")
     controls["register"] = register
+    if document:
+        length = value.get("length", "auto")
+        if length not in ("auto", "preserve"):
+            raise ValueError("length must be auto or preserve")
+        controls["length"] = length
     return controls
 
 
@@ -276,7 +282,7 @@ class Handler(BaseHTTPRequestHandler):
             self._fields(body, {"context", "source", "controls", "text"} if checking else {"context", "source", "controls"})
             source = validate_document_text(body.get("source"))
             draft = validate_document_text(body.get("text"), output=True) if checking else None
-            controls = validate_controls(body.get("controls"))
+            controls = validate_controls(body.get("controls"), document=True)
             context, evidence, preferences, report = self._writing_inputs(validate_context(body.get("context")))
             # Context choices are useful in the explicit local preview, but
             # unrelated lesson metadata does not belong in a portable result.

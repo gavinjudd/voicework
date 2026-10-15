@@ -9,7 +9,7 @@ export function cleanDocumentContext(value = {}) {
   return Object.fromEntries(Object.entries(contextLimits).map(([key, limit]) => [key, bounded(value?.[key], limit) ? value[key] : key === 'channel' ? 'work' : '']));
 }
 export function cleanDocumentControls(value = {}) {
-  return {...Object.fromEntries(['polish', 'detail', 'warmth', 'assertiveness'].map(key => [key, Number.isFinite(value?.[key]) && value[key] >= 0 && value[key] <= 100 ? value[key] : key === 'polish' || key === 'detail' ? 45 : 50])), structure: ['auto', 'prose', 'bullets'].includes(value?.structure) ? value.structure : 'auto', register: ['auto', 'casual', 'professional', 'formal'].includes(value?.register) ? value.register : 'auto'};
+  return {...Object.fromEntries(['polish', 'detail', 'warmth', 'assertiveness'].map(key => [key, Number.isFinite(value?.[key]) && value[key] >= 0 && value[key] <= 100 ? value[key] : key === 'polish' || key === 'detail' ? 45 : 50])), structure: ['auto', 'prose', 'bullets'].includes(value?.structure) ? value.structure : 'auto', register: ['auto', 'casual', 'professional', 'formal'].includes(value?.register) ? value.register : 'auto', length: ['auto', 'preserve'].includes(value?.length) ? value.length : 'auto'};
 }
 export function emptyDocument() {
   return {source: '', sourceName: '', text: '', context: cleanDocumentContext(), controls: cleanDocumentControls(), result: null, job: null, revision: 0, checkRevision: null, checkedSource: '', error: ''};

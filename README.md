@@ -113,6 +113,8 @@ python3 -m voicework.harness --request request.json --output result.json
 }
 ```
 
+For your own website, use the channel `personal website` (also `personal site` or `portfolio site`). Your explicitly broad long-form lessons apply there as defaults, and lessons, priors and samples saved under that channel apply directly; personal texting evidence does not. Add `"length": "preserve"` to `controls` for short copy such as labels, captions and site entries, so each part stays about as long as it is.
+
 To check an edited result without rewriting, include `text` alongside the original `source` and add `--check`. The JSON result contains the draft, separate checks, source/draft hashes, and context selection provenance. Exit code **0** means checks completed with no reported issue, **3** means review is required, and **2** means the operation failed. None of these codes certify personal voice accuracy. Output files must be new and are created with private filesystem permissions. Use `--request -` for stdin; omitting `--output` deliberately writes the result to stdout.
 
 The same interface is available through `POST /api/documents`, `POST /api/document-checks`, and polling `GET /api/documents/:id`. Jobs run in memory, survive browser refresh, and disappear on server restart; copy/download results you need to keep. Completed jobs expire after one hour or when evicted from the bounded result cache. See [BUILD_CONTRACT.md](docs/BUILD_CONTRACT.md).

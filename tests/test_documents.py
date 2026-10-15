@@ -383,5 +383,32 @@ class DocumentTests(unittest.TestCase):
         self.assertIn('Second-section', payloads[0]['adjacent_source_excerpts']['after']['text'])
 
 
+class LengthControlTests(unittest.TestCase):
+    SHORT = '# Labels\n\n## Cover label\n\nThe long versions\n\n## Caption\n\nShort version pinned on video.\n'
+
+    def test_length_control_is_validated(self):
+        with self.assertRaisesRegex(ValueError, 'length'):
+            Provider().generate_document({}, 'Text', {'length': 'shorter'}, [], [])
+        for value in ('auto', 'preserve'):
+            Provider().generate_document({}, 'Text', {'length': value}, [], [])
+
+    def test_preserve_flags_a_section_that_grows(self):
+        grown = self.SHORT.replace('The long versions', 'The long versions, written out properly for anyone who wants more')
+        codes = {i['code'] for i in deterministic_checks(self.SHORT, grown, 'preserve')}
+        self.assertIn('section_lengthened', codes)
+        self.assertNotIn('section_lengthened', {i['code'] for i in deterministic_checks(self.SHORT, grown)})
+        reworded = self.SHORT.replace('The long versions', 'The longer takes')
+        self.assertNotIn('section_lengthened', {i['code'] for i in deterministic_checks(self.SHORT, reworded, 'preserve')})
+
+    def test_preserve_reaches_the_prompt_and_the_review(self):
+        prompt = _prompt('document', {'blocks': [], 'controls': {'length': 'preserve'}})
+        self.assertIn('length control is auto or preserve', prompt)
+        grown = self.SHORT.replace('The long versions', 'The long versions, written out properly for anyone who wants more')
+        provider = Provider('codex')
+        with patch.object(Provider, '_invoke', side_effect=lambda task, payload: echo(task, payload)):
+            checks = provider.check_document(CONTEXT, self.SHORT, grown, {**CONTROLS, 'length': 'preserve'}, [], [])
+        self.assertIn('section_lengthened', {i['code'] for i in checks['content']['issues']})
+
+
 if __name__ == '__main__':
     unittest.main()
