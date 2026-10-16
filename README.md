@@ -135,7 +135,7 @@ A generated draft lists the examples supplied to the model. These IDs explain re
 | --- | --- |
 | `list_voice_contexts` | Channels with reviewed evidence and their counts |
 | `get_voice_guidance` | The context-matched lessons, practice reasons and presentation preferences a Voicework draft would use for a situation. Authored excerpts (`include_examples`) and confirmed priors (`include_priors`) are opt-in per call |
-| `get_story_voice` | A Story Engine voice file for chosen channels |
+| `get_story_voice` | A Story Engine voice file for chosen channels. Excerpts (`include_examples`) and confirmed priors as facts (`include_facts`) are opt-in per call; `topic` skips excerpts about the story's subject |
 | `propose_lesson` | Queues a suggested lesson after you correct an assistant's wording. **It changes nothing** until you accept it under **Voice profile → Proposed lessons** (max 50 pending) |
 
 Register it with your client. `scripts/voicework_mcp.py` works from any directory; `--data-dir` defaults to this repository's `data/`.
@@ -176,7 +176,7 @@ Creating a panel refuses a brief that duplicates or heavily overlaps a confirmed
 
 ## Tell stories in your voice (Story Engine)
 
-**Voice profile → Use with Story Engine** turns your profile into a voice file for [Story Engine](https://github.com/gavinjudd/story-engine). Describe the story use (for example *spoken interview answer*) and tick the channels whose habits should carry over. Channels saved as broad long-form lessons are preselected. The others stay off until you choose them. Preview, then export `story-voice.json`. The same is available offline from the command line, reading the local database directly:
+**Voice profile → Use with Story Engine** turns your profile into a voice file for [Story Engine](https://github.com/gavinjudd/story-engine). Describe the story use (for example *spoken interview answer*) and tick the channels whose habits should carry over. Channels saved as broad long-form lessons, and the `spoken story` and `written story` channels once you have taught them, are preselected. The others stay off until you choose them. Preview, then export `story-voice.json`. The same is available offline from the command line, reading the local database directly:
 
 ```sh
 python3 -m voicework.story_bridge --list
@@ -185,7 +185,15 @@ python3 -m voicework.story_bridge --target 'spoken interview answer' --channel '
 python3 story_engine.py bundle --voice-profile story-voice.json --seed '…'   # in the story-engine repo
 ```
 
-Enabled lessons, including remembered corrections, become traits and avoidances. Practice reasons and story-relevant presentation preferences come next, followed by cadence measured from confirmed, non-held-out samples in the chosen channels. Every trait keeps its learned context, such as `[work email · audience: teammates]`, and broader lessons outrank narrowly conditioned ones. The output is capped at 32 traits and 24 avoidances, and the file reports what was trimmed. Held-out or unconfirmed samples, AI and edited practice options, prior packets (which may contain facts), emoji and sign-off preferences, and evaluation ratings are never included. Excerpts require explicit opt-in. With no usable guidance, `voice_profile` is `null`. The file describes reviewed style evidence. It does not measure fidelity or prove authorship. CLI output files are new and created with mode 0600.
+Enabled lessons, including remembered corrections, become traits and avoidances. Practice reasons and story-relevant presentation preferences come next, followed by habits measured separately for each chosen channel from its confirmed, non-held-out samples. Each measured habit says how often it occurs and keeps its channel as its scope: average sentence length and the share of short and long sentences, closed-class signature words such as `“ngl” (3 of 8 samples)` (never subject words), contractions with or without apostrophes, lowercase starts, short lines, paragraph length, and punctuation used regularly. With four or more samples, em dashes, exclamation marks or semicolons that never appear become an avoidance. Story Engine uses a measured habit at or below its rate and only where its register fits. Every trait keeps its learned context, such as `[work email · audience: teammates]`, and broader lessons outrank narrowly conditioned ones. The output is capped at 32 traits and 24 avoidances, and the file reports what was trimmed. Held-out or unconfirmed samples, AI and edited practice options, emoji and sign-off preferences, and evaluation ratings are never included. Excerpts require explicit opt-in. With no usable guidance, `voice_profile` is `null`. The file describes reviewed style evidence. It does not measure fidelity or prove authorship. CLI output files are new and created with mode 0600.
+
+Three options support specific stories:
+
+- `--topic 'a few words about the story'` (the **Story subject** field) skips excerpts that share its subject words, so a sample about a misplaced button cannot seed a story about one. It is plain word overlap, and the topic is never written to the file.
+- `--facts` (the **prior packets as facts** box) adds your confirmed prior packets from the chosen channels as a separate `facts` list for true stories. That makes a version 2 file; without facts the file stays version 1. Confirmation does not verify a packet, so confirm only what is true.
+- `--holdout-output holdout.json` also writes your newest 50 held-out confirmed samples from those channels as a `voicework.holdout` pack for Story Engine's `voice-eval`, which measures how close writing with this voice file sounds to pieces you really wrote. It is the only export that contains held-out text. Keep it private, and never use it as an example or guidance.
+
+Story Engine's skill can also call `get_story_voice` and `propose_lesson` directly over MCP. It proposes style corrections made while telling stories into the `spoken story` or `written story` channel, where they wait under **Proposed lessons** for your review.
 
 ## Local data and boundaries
 

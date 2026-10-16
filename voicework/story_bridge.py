@@ -1,19 +1,28 @@
 """Translate reviewed Voicework evidence into a Story Engine voice file.
 
-The result is a portable JSON envelope (``voicework.story-voice`` version 1):
+The result is a portable JSON envelope (``voicework.story-voice``):
 
 - ``voice_profile``: a valid Story Engine ``{context, traits, avoid}`` object,
   or ``null`` when the selected channels hold no usable guidance.
 - ``voice_samples``: confirmed, non-held-out authored excerpts, only when the
   user explicitly opts in. Feedback, edited preferences, AI options and prior
-  packets never become samples.
+  packets never become samples. An optional story ``topic`` skips excerpts
+  that share its subject words (plain word overlap, not semantic matching);
+  the topic itself is never written to the file.
+- ``facts``: confirmed prior packets from the selected channels, only when the
+  user explicitly opts in. Facts make the file version 2; without them it stays
+  version 1, so older Story Engine installs can still read it.
 - ``provenance``: counts and IDs for review. Story Engine drops it before
   building a prompt.
 
 Selection is literal by channel (explicit aliases only, as in matching.py). A
 lesson keeps its declared audience/intent/relationship/stakes as a written
-scope on the trait instead of being silently generalized. Nothing here calls a
-model or claims a measured voice match.
+scope on the trait instead of being silently generalized. Cadence, signature
+wording, punctuation, capitalization and line habits are measured separately
+for each channel from its confirmed, non-held-out samples, and keep that
+channel as their scope. Held-out samples can be exported on their own as an
+evaluation pack (``voicework.holdout``); they never enter a voice file.
+Nothing here calls a model or claims a measured voice match.
 """
 import argparse
 import json
@@ -24,20 +33,68 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .learning import validate_context
-from .matching import CONDITION_FIELDS, normalize_label
+from .matching import _SCENARIO_STOPWORDS, CONDITION_FIELDS, normalize_label
 
 FORMAT = "voicework.story-voice"
 VERSION = 1
+FACTS_VERSION = 2
+HOLDOUT_FORMAT = "voicework.holdout"
 MAX_TRAITS = 32
 MAX_AVOID = 24
 MAX_EXAMPLES = 5
 MAX_EXAMPLE_CHARS = 1500
 MAX_ITEM_CHARS = 600
 MAX_TARGET_CHARS = 200
+MAX_TOPIC_CHARS = 300
+MAX_FACTS = 12
+MAX_FACT_CHARS = 4000  # A prior packet's own limit, so facts are never cut.
+# Story Engine's voice-eval reads at most this many held-out pieces, with contexts this long.
+MAX_HOLDOUT_ITEMS = 50
+MAX_HOLDOUT_CONTEXT_CHARS = 300
+MAX_SIGNATURES = 6
+SHORT_SENTENCE = 6
+LONG_SENTENCE = 20
+SHORT_LINE_WORDS = 10
 # Message-only presentation habits do not describe how someone tells a story.
 STORY_PRESENTATION_FIELDS = ("paragraph_length", "structure", "opening", "detail")
+# Channels that hold corrections made while telling stories; preselected when taught.
+STORY_CHANNELS = ("spoken story", "written story")
+# Closed-class discourse markers, hedges and casual words. Only these are
+# counted, so a sample's subject words can never become a "signature".
+SIGNATURE_MARKERS = (
+    "ngl", "tbh", "imo", "idk", "lol", "lmao", "haha", "lowkey", "fr", "bro", "dude", "yo",
+    "yeah", "yep", "nope", "nah", "omg", "btw", "fwiw", "tho", "gonna", "wanna", "gotta",
+    "kinda", "sorta", "dunno", "y'all",
+    "honestly", "basically", "literally", "actually", "totally", "definitely", "absolutely",
+    "super", "pretty much", "kind of", "sort of", "I mean", "I guess", "I think", "you know",
+    "to be fair", "to be honest",
+    "anyway", "so yeah", "that said", "turns out", "the thing is", "long story short",
+    "at the end of the day",
+)
+_MARKERS = [(marker, re.compile(r"(?<![\w'])%s(?![\w'])" % r"\s+".join(map(re.escape, marker.lower().split()))))
+            for marker in SIGNATURE_MARKERS]
+_PUNCTUATION = (
+    ("em dashes", re.compile(r"—|\s–\s|\s--\s")),
+    ("exclamation marks", re.compile(r"!+")),
+    ("ellipses", re.compile(r"…|\.{3,}")),
+    ("semicolons", re.compile(r";")),
+    ("parentheses", re.compile(r"\(")),
+)
+# Absences worth stating: models add these readily, so "never" is useful guidance.
+_ABSENCE_CHECKS = ("em dashes", "exclamation marks", "semicolons")
 _UNINFORMATIVE = {"", "unknown", "unspecified", "not specified", "unclear", "n/a", "unconfirmed"}
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_WORD = re.compile(r"\b[\w']+\b")
+_CONTRACTION = re.compile(r"\b(?:\w+n't|\w+'(?:re|ve|ll|d|m)|(?:it|that|what|there|here|he|she|who|where|how|let)'s)\b", re.I)
+# Contractions typed without an apostrophe. Ambiguous forms (ill, its, were, well, id) are left out.
+_BARE_CONTRACTION = re.compile(r"\b(?:cant|dont|didnt|doesnt|isnt|wasnt|werent|arent|havent|hasnt|hadnt|couldnt|"
+                               r"shouldnt|wouldnt|wont|youre|theyre|thats|whats|im|ive|youve|theyve|weve|youll|"
+                               r"theyll|itll)\b", re.I)
+# Short messages offer few chances to contract; claim "rarely" only with this much text.
+MIN_WORDS_FOR_RARELY = 150
+_BOUNDARY = re.compile(r"(?P<mark>\.{3,}|…|[.!?]+)(?P<close>[\"”')\]]*)\s+(?=(?P<next>\S))")
+_ABBREVIATIONS = frozenset("mr mrs ms dr st jr sr vs etc e.g i.e a.m p.m approx no".split())
+_END_MARK = re.compile(r"[.!?…][\"”')\]]*$")
 _DIMENSION_LABEL = {"vernacular": "Vernacular", "syntax": "Syntax", "diction": "Diction", "rhythm": "Rhythm"}
 
 
@@ -84,8 +141,10 @@ def available_sources(samples, feedback, lessons):
         labels = sorted(item.pop("labels").items(), key=lambda pair: (-pair[1], pair[0]))
         item["label"] = labels[0][0]
         item["labels"] = [label for label, _ in labels]
-        # Only lessons deliberately saved as broad long-form guidance are preselected.
-        item["suggested"] = key == "long-form writing" and item["lessons"] > 0
+        # Preselect only lessons deliberately saved as broad long-form guidance, and
+        # teaching captured while telling stories.
+        item["suggested"] = ((key == "long-form writing" and item["lessons"] > 0) or
+                             (key in STORY_CHANNELS and item["lessons"] + item["feedback"] > 0))
         result.append(item)
     result.sort(key=lambda item: (not item["suggested"], -(item["lessons"] + item["feedback"] + item["samples"]), item["channel"]))
     return result
@@ -111,27 +170,175 @@ def _quote(text):
     return "“%s”" % _clean(text, 240)
 
 
-def _sentences(text):
-    return [part for part in re.split(r"[.!?]+(?:[\"”’')\]]*)(?:\s|$)", text) if part.strip()]
+def _normalize(text):
+    return _CONTROL.sub(" ", text).replace("’", "'").replace("‘", "'")
 
 
-def _pattern_traits(samples, channel_labels):
-    if len(samples) < 2:
-        return []
-    words = [len(re.findall(r"\b[\w’']+\b", sample["text"])) for sample in samples]
-    sentence_count = sum(max(1, len(_sentences(sample["text"]))) for sample in samples)
-    average = sum(words) / sentence_count
+def _split_line(line):
+    """Split one line into sentences without breaking at a dialogue tag ("Ready?" she asked),
+    an abbreviation (9 a.m. and), or an ellipsis that runs on in lowercase (waited... and)."""
+    parts, start = [], 0
+    for match in _BOUNDARY.finditer(line):
+        mark, close, following = match.group("mark"), match.group("close"), match.group("next")
+        before = line[start:match.start()].split()
+        if following.islower() and (mark.startswith("...") or mark == "…" or (close and mark[-1] in "?!")):
+            continue
+        if mark == "." and before and before[-1].lower().rstrip(".") in _ABBREVIATIONS:
+            continue
+        parts.append(line[start:match.start() + len(mark) + len(close)])
+        start = match.end()
+    parts.append(line[start:])
+    return [part.strip() for part in parts if _WORD.search(part)]
+
+
+def _units(text):
+    """Sentences, also ending at line breaks, which is how messages are written."""
+    units = []
+    for line in re.split(r"\n+", text):
+        units.extend(_split_line(line.strip()))
+    return units
+
+
+def _starts_lowercase(unit):
+    first = unit.lstrip("\"“'([*-•> \t")
+    if not first or not first[0].isalpha():
+        return None
+    return first[0].islower()
+
+
+def _percent(part, whole):
+    return int(round(100.0 * part / whole / 5) * 5) if whole else 0
+
+
+def _either(names):
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + (", or " if len(names) > 2 else " or ") + names[-1]
+
+
+def _measured_traits(samples, label):
+    """Describe habits measured in one channel's confirmed samples: ``(traits, avoid)``.
+
+    Numbers are counts from these samples, reported so a writer can match a rate
+    instead of a caricature. Fewer than two samples measure nothing.
+    """
     n = len(samples)
-    qualifier = "provisional, " if n < 3 else ""
-    where = ", ".join(channel_labels)
-    traits = ["[observed in %d confirmed samples · %s] Sentences average about %.0f words (%sapproximate). "
-              "Keep a comparable relative rhythm; do not force a fixed sentence count or length." % (n, where, average, qualifier)]
-    contractions = sum(bool(re.search(r"\b\w+[’'](?:t|re|ve|ll|d|m|s)\b", sample["text"], re.I)) for sample in samples)
+    if n < 2:
+        return [], []
+    texts = [_normalize(sample["text"]) for sample in samples]
+    scope = "[observed in %d confirmed samples · %s]" % (n, label)
+    traits, avoid = [], []
+
+    lengths = [len(_WORD.findall(unit)) for text in texts for unit in _units(text)]
+    average = sum(lengths) / max(1, len(lengths))
+    cadence = "%s Sentences average about %.0f words (%sapproximate)." % (scope, average, "provisional, " if n < 3 else "")
+    if len(lengths) >= 6:
+        cadence += " About %d%% run %d words or fewer and %d%% run %d or more." % (
+            _percent(sum(length <= SHORT_SENTENCE for length in lengths), len(lengths)), SHORT_SENTENCE,
+            _percent(sum(length >= LONG_SENTENCE for length in lengths), len(lengths)), LONG_SENTENCE)
+    traits.append(cadence + " Keep a comparable relative rhythm; do not force a fixed sentence count or length.")
+
+    found = []
+    for marker, pattern in _MARKERS:
+        present = sum(bool(pattern.search(text.lower())) for text in texts)
+        if present >= 2 and present * 4 >= n:
+            found.append((present, marker))
+    found.sort(key=lambda item: (-item[0], item[1].lower()))
+    if found:
+        traits.append("%s Signature wording, with how often it appears: %s. Use each at or below that rate, only where "
+                      "this context fits; never stack them." % (
+                          scope, ", ".join("“%s” (%d of %d samples)" % (marker, present, n) for present, marker in found[:MAX_SIGNATURES])))
+
+    words = sum(len(_WORD.findall(text)) for text in texts) or 1
+    contractions = sum(bool(_CONTRACTION.search(text) or _BARE_CONTRACTION.search(text)) for text in texts)
+    bare = [_BARE_CONTRACTION.findall(text.lower()) for text in texts]
     if contractions * 3 >= n * 2:
-        traits.append("[observed in %d confirmed samples · %s] Uses contractions naturally (%d of %d samples)." % (n, where, contractions, n))
-    elif contractions * 3 <= n:
-        traits.append("[observed in %d confirmed samples · %s] Rarely uses contractions (%d of %d samples); do not add them for false casualness." % (n, where, contractions, n))
-    return traits
+        traits.append("%s Uses contractions naturally (%d of %d samples)." % (scope, contractions, n))
+    elif contractions * 3 <= n and words >= MIN_WORDS_FOR_RARELY:
+        traits.append("%s Rarely uses contractions (%d of %d samples); do not add them for false casualness." % (scope, contractions, n))
+    bare_samples = sum(bool(found) for found in bare)
+    if bare_samples >= 2 and bare_samples * 3 >= n:
+        forms = sorted({form for found in bare for form in found}, key=lambda form: (-sum(form in found for found in bare), form))
+        traits.append("%s Writes contractions without apostrophes (%s) in %d of %d samples, a casual-register habit; "
+                      "keep it to that register." % (scope, ", ".join("“%s”" % form for form in forms[:3]), bare_samples, n))
+
+    habits, absent = [], []
+    for name, pattern in _PUNCTUATION:
+        present = sum(bool(pattern.search(text)) for text in texts)
+        if present >= 2 and present * 3 >= n * 2:
+            count = sum(len(pattern.findall(text)) for text in texts)
+            habits.append("%s (in %d of %d samples, about %.1f per 100 words)" % (name, present, n, 100.0 * count / words))
+        elif present == 0 and n >= 4 and name in _ABSENCE_CHECKS:
+            absent.append(name)
+    if habits:
+        traits.append("%s Punctuation used regularly: %s." % (scope, "; ".join(habits)))
+    if absent:
+        avoid.append("%s No %s in any of %d samples; do not add them." % (scope, _either(absent), n))
+
+    lowercase = 0
+    for text in texts:
+        starts = [value for value in map(_starts_lowercase, _units(text)) if value is not None]
+        if starts and sum(starts) * 2 >= len(starts):
+            lowercase += 1
+    if lowercase >= 2 and lowercase * 3 >= n * 2:
+        traits.append("%s Starts sentences in lowercase in %d of %d samples, a casual-register habit; keep it to that register." % (
+            scope, lowercase, n))
+
+    unmarked = 0
+    for text in texts:
+        units = _units(text)
+        if units and sum(not _END_MARK.search(unit) for unit in units) * 2 > len(units):
+            unmarked += 1
+    if unmarked >= 2 and unmarked * 3 >= n * 2:
+        traits.append("%s Leaves most sentences without a closing period or other end mark in %d of %d samples, a "
+                      "casual-register habit; keep it to that register." % (scope, unmarked, n))
+
+    line_lengths = []
+    for text in texts:
+        lines = [line for line in text.split("\n") if _WORD.search(line)]
+        if len(lines) >= 3:
+            per_line = sum(len(_WORD.findall(line)) for line in lines) / len(lines)
+            if per_line <= SHORT_LINE_WORDS:
+                line_lengths.append(per_line)
+    if len(line_lengths) >= 2 and len(line_lengths) * 3 >= n * 2:
+        traits.append("%s Breaks a message into short lines: about %.0f words per line in %d of %d samples." % (
+            scope, sum(line_lengths) / len(line_lengths), len(line_lengths), n))
+
+    paragraph_words, multi = [], 0
+    for text in texts:
+        paragraphs = [part for part in re.split(r"\n\s*\n", text) if _WORD.search(part)]
+        if len(paragraphs) >= 2:
+            multi += 1
+            paragraph_words.extend(len(_WORD.findall(part)) for part in paragraphs)
+    if multi >= 2:
+        traits.append("%s Paragraphs average about %.0f words where a sample has more than one (%d of %d samples)." % (
+            scope, sum(paragraph_words) / len(paragraph_words), multi, n))
+    return traits, avoid
+
+
+def _stem(word):
+    """A small consistent stemmer: sister's/sisters/sister, weddings/wedding, shipped/ships."""
+    if word.endswith("'s"):
+        word = word[:-2]
+    if word.endswith("es") and len(word) > 5 and word[-3] in "sxz":
+        word = word[:-2]
+    elif word.endswith("s") and not word.endswith("ss") and len(word) > 4:
+        word = word[:-1]
+    if word.endswith("ing") and len(word) > 6:
+        word = word[:-3]
+    elif word.endswith("ed") and len(word) > 5:
+        word = word[:-2]
+    if len(word) > 3 and word[-1] == word[-2] and word[-1] not in "aeiouls":
+        word = word[:-1]  # wedd -> wed, shipp -> ship
+    return word
+
+
+def _subject_words(text):
+    """Content words for a crude same-subject check; generic writing words are ignored."""
+    words = set()
+    for word in re.findall(r"[a-z][a-z']+", _normalize(text).lower()):
+        stem = _stem(word)
+        if len(word) >= 4 and word not in _SCENARIO_STOPWORDS and stem not in _SCENARIO_STOPWORDS:
+            words.add(stem)
+    return words
 
 
 def _excerpt(text):
@@ -161,9 +368,19 @@ def validate_target(value):
     return target
 
 
-def build_story_voice(samples, feedback, lessons, target, channels, include_examples=False, now=None):
-    """Return the envelope; raises ValueError for a missing target or channel."""
-    target = validate_target(target)
+def validate_topic(value):
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("Story topic must be text")
+    topic = _clean(value, 10_000)
+    if len(topic) > MAX_TOPIC_CHARS:
+        raise ValueError("Story topic exceeds %d characters" % MAX_TOPIC_CHARS)
+    return topic
+
+
+def select_channels(channels):
+    """Matching keys for the requested channels, in order; raises ValueError."""
     if not isinstance(channels, (list, tuple)) or not channels or any(not isinstance(item, str) for item in channels):
         raise ValueError("Select at least one Voicework channel to draw from")
     selected = []
@@ -173,6 +390,15 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
             raise ValueError("Channel %r is not specific enough to select evidence" % channel)
         if key not in selected:
             selected.append(key)
+    return selected
+
+
+def build_story_voice(samples, feedback, lessons, target, channels, include_examples=False, now=None, *,
+                      priors=(), include_facts=False, topic=None):
+    """Return the envelope; raises ValueError for a missing target or channel."""
+    target = validate_target(target)
+    topic = validate_topic(topic)
+    selected = select_channels(channels)
     sources = {item["channel"]: item for item in available_sources(samples, feedback, lessons)}
     missing = [key for key in selected if key not in sources]
     labels = [sources[key]["label"] if key in sources else key for key in selected]
@@ -219,15 +445,41 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
 
     measured = [sample for sample in samples if _usable_sample(sample) and chosen(sample.get("context"))]
     measured.sort(key=lambda sample: sample.get("created_at", ""), reverse=True)
-    measured_labels = [label for key, label in zip(selected, labels)
-                       if any(_channel_key(sample.get("context")) == key for sample in measured)]
-    patterns = _pattern_traits(measured, measured_labels)
+    patterns, pattern_avoid = [], []
+    for key, label in zip(selected, labels):
+        channel_traits, channel_avoid = _measured_traits(
+            [sample for sample in measured if _channel_key(sample.get("context")) == key], label)
+        patterns += channel_traits
+        for item in channel_avoid:
+            _add(pattern_avoid, seen_avoid, item)
 
     # Explicit user teaching outranks inferred measurements when space is short.
     candidates = traits + notes + presentation + patterns
     final_traits = candidates[:MAX_TRAITS]
-    final_avoid = avoid[:MAX_AVOID]
-    examples = [_excerpt(sample["text"]) for sample in measured[:MAX_EXAMPLES]] if include_examples else []
+    avoid_candidates = avoid + pattern_avoid
+    final_avoid = avoid_candidates[:MAX_AVOID]
+
+    examples, skipped_for_topic = [], 0
+    if include_examples:
+        topic_words = _subject_words(topic) if topic else set()
+        for sample in measured:
+            if len(examples) == MAX_EXAMPLES:
+                break
+            if topic_words & _subject_words(sample["text"]):
+                skipped_for_topic += 1
+                continue
+            examples.append(_excerpt(sample["text"]))
+
+    facts = []
+    if include_facts:
+        seen_facts = set()
+        packets = [prior for prior in priors if prior.get("confirmed") is True and chosen(prior.get("context"))]
+        for prior in sorted(packets, key=lambda prior: prior.get("created_at", ""), reverse=True):
+            text, label = _clean(prior.get("text"), MAX_FACT_CHARS), _clean(prior.get("label"), 120)
+            if text:
+                _add(facts, seen_facts, "%s: %s" % (label, text) if label else text)
+    fact_count = len(facts)
+    facts = facts[:MAX_FACTS]
 
     warnings = []
     if missing:
@@ -237,46 +489,95 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
                         "preferences, or two confirmed samples. voice_profile is null; Story Engine will use its default voice.")
     if len(candidates) > MAX_TRAITS:
         warnings.append("Kept the %d highest-priority traits of %d (broadest, then newest, explicit lessons first)." % (MAX_TRAITS, len(candidates)))
-    if len(avoid) > MAX_AVOID:
-        warnings.append("Kept %d of %d avoid entries." % (MAX_AVOID, len(avoid)))
+    if len(avoid_candidates) > MAX_AVOID:
+        warnings.append("Kept %d of %d avoid entries." % (MAX_AVOID, len(avoid_candidates)))
     if include_examples and not examples:
-        warnings.append("No confirmed, non-held-out samples in the selected channels; no examples were included.")
+        warnings.append("No confirmed, non-held-out samples in the selected channels%s; no examples were included." % (
+            " that avoid the story's subject" if skipped_for_topic else ""))
+    elif skipped_for_topic:
+        warnings.append("Skipped %d excerpt(s) that share subject words with the story topic." % skipped_for_topic)
+    if include_facts and not facts:
+        warnings.append("No confirmed prior packets in the selected channels; no facts were included.")
+    if fact_count > MAX_FACTS:
+        warnings.append("Kept the %d newest of %d confirmed prior packets as facts." % (MAX_FACTS, fact_count))
 
     profile = None
     if final_traits:
         profile = {"context": "%s — learned from Voicework evidence in: %s" % (target, ", ".join(labels)),
                    "traits": final_traits, "avoid": final_avoid}
+    excluded = ["held-out and unconfirmed samples", "AI-generated and edited practice options",
+                "unconfirmed prior packets and those outside the selected channels" if include_facts
+                else "prior context packets (may contain facts)",
+                "emoji and sign-off preferences", "evaluation ratings"]
+    notice = ("Style guidance from explicitly reviewed evidence. Not a measured voice match, "
+              "an authorship claim, or a source of story facts.")
+    if facts:
+        notice += (" The separate facts list holds prior packets you confirmed and chose to include;"
+                   " confirmation does not verify them.")
+    result = {"format": FORMAT, "version": FACTS_VERSION if facts else VERSION,
+              "voice_profile": profile, "voice_samples": examples}
+    if facts:
+        result["facts"] = facts
+    result["provenance"] = {
+        "source": "Voicework",
+        "exported_at": (now or datetime.now(timezone.utc)).isoformat(),
+        "target_context": target,
+        "channels": labels,
+        "counts": {"lessons_used": len(used_lessons), "feedback_used": len(used_feedback),
+                   "samples_measured": len(measured), "examples_included": len(examples),
+                   "examples_skipped_for_topic": skipped_for_topic, "facts_included": len(facts),
+                   "traits": len(final_traits), "avoid": len(final_avoid)},
+        "lesson_ids": [ident for ident in used_lessons if ident],
+        "excluded": excluded,
+        "warnings": warnings,
+        "notice": notice,
+    }
+    return result
+
+
+def build_holdout_pack(samples, channels, now=None):
+    """Held-out confirmed samples from the chosen channels, for a blind voice evaluation.
+
+    This is the only export that contains held-out text. It is evaluation
+    reference material: it must never become guidance, an example or a prompt
+    for the writer being evaluated.
+    """
+    selected = select_channels(channels)
+    labels, items = {}, []
+    held = [sample for sample in samples if sample.get("status") == "confirmed" and sample.get("held_out") is True
+            and _channel_key(sample.get("context")) in selected]
+    for sample in sorted(held, key=lambda sample: sample.get("created_at", ""), reverse=True)[:MAX_HOLDOUT_ITEMS]:
+        key = _channel_key(sample.get("context"))
+        labels.setdefault(key, (sample.get("context") or {}).get("channel") or key)
+        items.append({"id": sample.get("id"),
+                      "context": _clean(_scope(sample.get("context"))[1:-1], MAX_HOLDOUT_CONTEXT_CHARS),
+                      "text": _CONTROL.sub(" ", sample["text"]).strip()})
     return {
-        "format": FORMAT, "version": VERSION,
-        "voice_profile": profile,
-        "voice_samples": examples,
-        "provenance": {
-            "source": "Voicework",
-            "exported_at": (now or datetime.now(timezone.utc)).isoformat(),
-            "target_context": target,
-            "channels": labels,
-            "counts": {"lessons_used": len(used_lessons), "feedback_used": len(used_feedback),
-                       "samples_measured": len(measured), "examples_included": len(examples),
-                       "traits": len(final_traits), "avoid": len(final_avoid)},
-            "lesson_ids": [ident for ident in used_lessons if ident],
-            "excluded": ["held-out and unconfirmed samples", "AI-generated and edited practice options",
-                         "prior context packets (may contain facts)", "emoji and sign-off preferences",
-                         "evaluation ratings"],
-            "warnings": warnings,
-            "notice": "Style guidance from explicitly reviewed evidence. Not a measured voice match, "
-                      "an authorship claim, or a source of story facts.",
-        },
+        "format": HOLDOUT_FORMAT, "version": 1,
+        "exported_at": (now or datetime.now(timezone.utc)).isoformat(),
+        "channels": [labels.get(key, key) for key in selected],
+        "items": items,
+        "total_held_out": len(held),
+        "notice": "Held-out authored text for evaluation only. Never use it as voice guidance, an example or story "
+                  "material, and keep it out of the writing prompts being evaluated.",
     }
 
 
 def _load(data_dir):
+    from .context import PriorStore
     from .language import LanguageLessonStore
     from .store import Store
     path = Path(data_dir) / "voicework.sqlite3"
     if not path.is_file():
         raise ValueError("No Voicework database at %s; pass --data-dir" % path)
     store = Store(path)
-    return store.samples(), store.feedback(), LanguageLessonStore(path).list()
+    return store.samples(), store.feedback(), LanguageLessonStore(path).list(), PriorStore(path).list(confirmed_only=True)
+
+
+def _write_new(path, value):
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
 
 
 def main(argv=None):
@@ -286,26 +587,57 @@ def main(argv=None):
     parser.add_argument("--target", help="Where the story voice is used, e.g. 'spoken interview answer'")
     parser.add_argument("--channel", action="append", help="Voicework channel to draw from; repeatable")
     parser.add_argument("--examples", action="store_true", help="Include up to 5 confirmed authored excerpts")
+    parser.add_argument("--topic", help="The story's subject in a few words; excerpts sharing its words are skipped (never saved)")
+    parser.add_argument("--facts", action="store_true",
+                        help="Include confirmed prior packets from these channels as facts (for true stories); makes a version 2 file")
     parser.add_argument("--output", help="New file to create (mode 0600); omit for stdout")
+    parser.add_argument("--holdout-output",
+                        help="Also write this new file (mode 0600) with held-out confirmed samples from these channels, for story_engine.py voice-eval")
     args = parser.parse_args(argv)
     try:
-        samples, feedback, lessons = _load(args.data_dir)
+        # Check every destination first so a refusal never leaves one file half-written.
+        if any(path and os.path.lexists(path) for path in (args.output, args.holdout_output)):
+            raise FileExistsError
+        samples, feedback, lessons, priors = _load(args.data_dir)
         if args.list:
             for item in available_sources(samples, feedback, lessons):
                 print("%s%s  lessons=%d feedback=%d samples=%d" % (
                     item["label"], "  (suggested)" if item["suggested"] else "", item["lessons"], item["feedback"], item["samples"]))
             return 0
-        result = build_story_voice(samples, feedback, lessons, args.target, args.channel or [], args.examples)
-        text = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+        result = build_story_voice(samples, feedback, lessons, args.target, args.channel or [], args.examples,
+                                   priors=priors, include_facts=args.facts, topic=args.topic)
+        holdout = None
+        if args.holdout_output:
+            holdout = build_holdout_pack(samples, args.channel or [])
+            if not holdout["items"]:
+                raise ValueError("No held-out confirmed samples in these channels. Mark a few confirmed samples as "
+                                 "held out in Voicework → Samples first.")
+        if args.output and args.holdout_output and os.path.abspath(args.output) == os.path.abspath(args.holdout_output):
+            raise ValueError("--output and --holdout-output must be different files")
+        written = []
+        try:
+            if args.output:
+                _write_new(args.output, result)
+                written.append(args.output)
+            if holdout:
+                _write_new(args.holdout_output, holdout)
+                written.append(args.holdout_output)
+        except OSError:
+            for path in written:  # Only files this run created.
+                os.unlink(path)
+            raise
         if args.output:
-            descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(text)
-            print("Wrote %s (%d traits, %d avoid, %d examples)." % (
-                args.output, result["provenance"]["counts"]["traits"], result["provenance"]["counts"]["avoid"],
-                result["provenance"]["counts"]["examples_included"]), file=sys.stderr)
+            counts = result["provenance"]["counts"]
+            print("Wrote %s (%d traits, %d avoid, %d examples, %d facts)." % (
+                args.output, counts["traits"], counts["avoid"], counts["examples_included"], counts["facts_included"]), file=sys.stderr)
         else:
-            sys.stdout.write(text)
+            sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        if holdout:
+            print("Wrote %s (%d held-out samples). Use it only for evaluation." % (args.holdout_output, len(holdout["items"])),
+                  file=sys.stderr)
+            if holdout["total_held_out"] > len(holdout["items"]):
+                print("note: kept the %d newest of %d held-out samples." % (len(holdout["items"]), holdout["total_held_out"]),
+                      file=sys.stderr)
         for warning in result["provenance"]["warnings"]:
             print("note: " + warning, file=sys.stderr)
         return 0

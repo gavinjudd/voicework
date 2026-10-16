@@ -8,7 +8,7 @@ const ui = {
   route: routes[location.hash.slice(1)] ? location.hash.slice(1) : 'write',
   filter: 'pending', context: { channel: 'work', audience: '', intent: '', stakes: '', relationship: '', scenario: '' },
   selections: new Map(), draft: null, brief: '', controls: { polish: 45, detail: 45, warmth: 50, assertiveness: 50, structure: 'auto', register: 'auto' },
-  scanResult: null, scanRunning: null, exportText: '', includeExamples: false, storyTarget: 'spoken interview answer', storyChannels: null, storyExamples: false, storyVoice: null, practiceFocus: 'vernacular',
+  scanResult: null, scanRunning: null, exportText: '', includeExamples: false, storyTarget: 'spoken interview answer', storyChannels: null, storyExamples: false, storyFacts: false, storyTopic: '', storyVoice: null, practiceFocus: 'vernacular',
   lessonDraft: {dimension: 'vernacular', guidance: '', preferred: '', avoided: ''},
   editedDraft: '', draftUndo: null, rememberDraft: null, replacePrompt: false, generating: false, editorStorageError: false,
   qualityForm: {correctionId: '', brief: '', context: null}, qualityVotes: {},
@@ -963,21 +963,26 @@ function storyEnginePanel() {
       ui.storyChannels = event.target.checked ? [...new Set([...ui.storyChannels, item.channel])] : ui.storyChannels.filter(key => key !== item.channel); reset();
     } });
     const counts = [item.lessons && `${item.lessons} lesson${item.lessons === 1 ? '' : 's'}`, item.feedback && `${item.feedback} practice`, item.samples && `${item.samples} sample${item.samples === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
-    return el('label', { class: 'checkbox' }, box, el('span', {}, el('strong', {}, item.label), ` — ${counts}${item.suggested ? ' (saved as broad long-form)' : ''}`));
+    const why = ['spoken story', 'written story'].includes(item.channel) ? ' (taught while telling stories)' : ' (saved as broad long-form)';
+    return el('label', { class: 'checkbox' }, box, el('span', {}, el('strong', {}, item.label), ` — ${counts}${item.suggested ? why : ''}`));
   })) : helper('No lessons, practice notes, or confirmed samples yet. Teach a lesson or remember a correction first.');
   const examples = input({ type: 'checkbox', checked: ui.storyExamples, onChange: event => { ui.storyExamples = event.target.checked; reset(); } });
+  const topic = input({ maxlength: 300, value: ui.storyTopic, placeholder: 'e.g. an undo button for sent messages', onInput: event => { ui.storyTopic = event.target.value; reset(); } });
+  const facts = input({ type: 'checkbox', checked: ui.storyFacts, onChange: event => { ui.storyFacts = event.target.checked; reset(); } });
   const query = () => {
     if (!ui.storyTarget.trim()) throw new Error('Describe where Story Engine will use this voice.');
     if (!ui.storyChannels.length) throw new Error('Choose at least one channel whose habits should carry into the story.');
     const params = new URLSearchParams({ target: ui.storyTarget.trim() });
     for (const channel of ui.storyChannels) params.append('channel', channel);
     if (ui.storyExamples) params.set('examples', '1');
+    if (ui.storyExamples && ui.storyTopic.trim()) params.set('topic', ui.storyTopic.trim());
+    if (ui.storyFacts) params.set('facts', '1');
     return `/export/story-engine?${params}`;
   };
   const render = voice => {
     const p = voice.provenance;
     preview.replaceChildren(
-      el('p', { class: 'export-note' }, `${p.counts.traits} traits · ${p.counts.avoid} avoid · ${p.counts.examples_included} authored excerpt${p.counts.examples_included === 1 ? '' : 's'} · from ${p.counts.lessons_used} lessons and ${p.counts.feedback_used} practice notes`),
+      el('p', { class: 'export-note' }, `${p.counts.traits} traits · ${p.counts.avoid} avoid · ${p.counts.examples_included} authored excerpt${p.counts.examples_included === 1 ? '' : 's'} · ${p.counts.facts_included || 0} fact${p.counts.facts_included === 1 ? '' : 's'} · from ${p.counts.lessons_used} lessons and ${p.counts.feedback_used} practice notes`),
       ...p.warnings.map(text => el('div', { class: 'callout warning', style: 'margin: 8px 0' }, text)),
       details('Story Engine voice preview', el('pre', { class: 'export-preview' }, JSON.stringify(voice, null, 2)), true));
   };
@@ -992,9 +997,11 @@ function storyEnginePanel() {
   }, 'Preparing…'), 'primary wide', 'download');
   if (ui.storyVoice) render(ui.storyVoice);
   return el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Tell stories in your voice'), el('h3', {}, 'Use with Story Engine'),
-    el('p', { class: 'export-note' }, 'Turns the lessons, practice notes and patterns from the channels you choose into a Story Engine voice file. Each habit keeps the context it was learned in. Prior packets and AI options are never included.'),
+    el('p', { class: 'export-note' }, 'Turns the lessons, practice notes and patterns from the channels you choose into a Story Engine voice file. Each habit keeps the context it was learned in, and measured habits say how often they occur. AI options are never included; prior packets only when you add them as facts.'),
     field('Story use', target), el('div', { class: 'field-label', style: 'margin: 12px 0 6px' }, 'Draw habits from'), sourceList,
-    el('label', { class: 'checkbox', style: 'margin: 14px 0 17px' }, examples, el('span', {}, 'Include up to 5 confirmed excerpts from these channels as voice samples. Held-out samples stay excluded.')),
+    el('label', { class: 'checkbox', style: 'margin: 14px 0 6px' }, examples, el('span', {}, 'Include up to 5 confirmed excerpts from these channels as voice samples. Held-out samples stay excluded.')),
+    field('Story subject for excerpts (optional)', topic, 'Excerpts sharing its words are skipped; not saved'),
+    el('label', { class: 'checkbox', style: 'margin: 6px 0 17px' }, facts, el('span', {}, 'Add my confirmed prior packets from these channels as facts the story may use, for true stories. They may contain personal details.')),
     download, el('div', { style: 'margin-top: 7px' }, previewButton), preview,
     helper('Then: python3 story_engine.py bundle --voice-profile story-voice.json --seed "…"'));
 }

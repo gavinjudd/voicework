@@ -1,5 +1,14 @@
 # Verification — 2026-10-13
 
+## Story Engine voice upgrade — 2026-10-15
+
+- `python -m unittest discover -s tests` passed (271 tests, Python 3.9 and 3.14) and `node --test tests/*.js` passed (42) after adding measured habits per channel, contractions without apostrophes, sentences without end marks, signature wording with rates, topic-aware excerpts, opt-in facts (version 2 files), the holdout pack, story-channel suggestions, and the MCP/API options.
+- A synthetic author (8 chat and 5 long-form confirmed samples, 3 held out, 4 lessons, 1 confirmed prior) was exported through the CLI. The first real export reported "rarely uses contractions" for chat that writes "cant"; apostrophe-less forms are now counted and "rarely" needs at least 150 words.
+- Story Engine's skill ran in `claude -p` with only this MCP server connected: it called `list_voice_contexts`, then `get_story_voice` (spoken story + long-form channels, a topic, no excerpts), and after a wording correction and an explicit yes, `propose_lesson` in `spoken story`. The proposal appeared as pending under **Proposed lessons** in the app.
+- An independent review then found and the same change fixed: holdout contexts over 300 characters or packs over 50 pieces (now clipped and capped), a partial voice file when the holdout write failed (now removed), possessive 's counted as a contraction, sentence splits at dialogue tags, abbreviations and run-on ellipses, and inconsistent topic stemming.
+- Browser check of **Use with Story Engine** on a copy of that database: the story channel shows as taught while telling stories, the subject field and facts box reach the API, and the preview reports 5 excerpts, 1 fact, version 2 and the skipped-excerpt notice. No console errors.
+- Story Engine's `voice-eval` on the 3 held-out synthetic pieces: writing without voice evidence ranked last in all 18 blind judgments. Voiced chat rewrites ended 9 of 13 lines with a period before the end-mark measurement and 0 of 13 after it. Outputs are in Story Engine's `reports/voice-upgrade-2026-10-15/`. Synthetic evidence only; no real user samples were used.
+
 ## Claude provider (no Codex, no API key) — 2026-10-14
 
 - `python3 scripts/verify_harness_live.py --provider claude` ran live on the development Mac through the Claude Code CLI 2.1.300 with the user's Claude subscription login, model `claude-opus-5-5`, in safe mode with no tools. All three synthetic cases passed every hard check (protected structure unchanged, no numeric/link/citation invariant errors, semantic review complete, voice guidance retained):

@@ -128,6 +128,176 @@ class StoryBridgeUnitTests(unittest.TestCase):
         self.assertEqual(sources[0]["channel"], "long-form writing")
 
 
+CHAT = [  # Synthetic, fictional texts with a deliberate chat register.
+    "ngl the bus was late again\nhonestly fine\nsee you at 6",
+    "ok so the tickets came through\nngl kinda thrilled\nbring snacks",
+    "honestly cannot wait\nwe leave at 5\nngl i packed already",
+    "running late, sorry\nsave me a seat\nhonestly the traffic is wild",
+]
+ESSAY = [  # Synthetic, fictional long-form passages.
+    "The first draft worked on my desk. It failed on the train; nobody could find the menu.\n\nSo I moved it.",
+    "I had assumed the hard part was the parser. It wasn't. The hard part was deciding what to do with input that was almost right.",
+    "We shipped on a Thursday. By Friday I knew nobody reads tooltips, so I rewrote the empty state instead.",
+]
+
+
+def prior(ident, channel, text, confirmed=True, label="Background", created="2026-01-01"):
+    return {"id": ident, "label": label, "text": text, "context": {"channel": channel}, "source": "test",
+            "confirmed": confirmed, "created_at": created}
+
+
+class StoryBridgeMeasurementTests(unittest.TestCase):
+    def voice(self, **kwargs):
+        samples = ([sample("c%d" % i, "personal chat", text, created="2026-02-0%d" % (i + 1)) for i, text in enumerate(CHAT)] +
+                   [sample("e%d" % i, "long-form writing", text, created="2026-03-0%d" % (i + 1)) for i, text in enumerate(ESSAY)])
+        return build_story_voice(samples, [], [], "spoken story", kwargs.pop("channels", ["personal chat", "long-form writing"]), **kwargs)
+
+    def test_signature_wording_reports_rates_and_only_closed_class_markers(self):
+        traits = self.voice()["voice_profile"]["traits"]
+        signature = next(trait for trait in traits if "Signature wording" in trait)
+        self.assertTrue(signature.startswith("[observed in 4 confirmed samples · personal chat]"))
+        self.assertIn("“ngl” (3 of 4 samples)", signature)
+        self.assertIn("“honestly” (3 of 4 samples)", signature)
+        self.assertIn("at or below that rate", signature)
+        # Subject words recur too, but never become signatures.
+        self.assertNotIn("bus", signature)
+        self.assertFalse(any("Signature wording" in trait and "long-form writing" in trait for trait in traits))
+
+    def test_habits_are_measured_per_channel_with_their_own_scope(self):
+        voice = self.voice()
+        traits = voice["voice_profile"]["traits"]
+        lowercase = next(trait for trait in traits if "lowercase" in trait)
+        self.assertTrue(lowercase.startswith("[observed in 4 confirmed samples · personal chat]"))
+        self.assertIn("keep it to that register", lowercase)
+        lines = next(trait for trait in traits if "short lines" in trait)
+        self.assertIn("personal chat", lines)
+        unmarked = [trait for trait in traits if "without a closing period" in trait]
+        self.assertEqual(len(unmarked), 1)  # Chat only; the long-form samples end their sentences.
+        self.assertTrue(unmarked[0].startswith("[observed in 4 confirmed samples · personal chat]"))
+        cadence = [trait for trait in traits if "Sentences average" in trait]
+        self.assertEqual(len(cadence), 2)  # One per channel, never pooled.
+        self.assertTrue(any("· long-form writing]" in trait for trait in cadence))
+        self.assertTrue(any("run 6 words or fewer" in trait for trait in cadence))
+        # Only one long-form sample has two paragraphs: too little to state a paragraph habit.
+        self.assertFalse(any("Paragraphs average" in trait for trait in traits))
+        # Four chat samples with no em dashes, exclamation marks or semicolons.
+        self.assertIn("[observed in 4 confirmed samples · personal chat] No em dashes, exclamation marks, or semicolons "
+                      "in any of 4 samples; do not add them.", voice["voice_profile"]["avoid"])
+        self.assertEqual(voice["provenance"]["counts"]["samples_measured"], 7)
+
+    def test_contractions_without_apostrophes_count_and_short_messages_never_claim_rarely(self):
+        texts = ["cant make it sat\nknee is weird", "dont wait for me\nim close", "running late\nsave a seat", "ok see you soon"]
+        traits = build_story_voice([sample("b%d" % i, "chat", text) for i, text in enumerate(texts)], [], [], "story", ["chat"])["voice_profile"]["traits"]
+        bare = next(trait for trait in traits if "without apostrophes" in trait)
+        self.assertIn("(“cant”, “dont”, “im”) in 2 of 4 samples", bare)
+        self.assertFalse(any("Rarely uses contractions" in trait for trait in traits))  # Too little text to judge.
+        formal = ["The committee met on a Tuesday and approved the plan without further discussion of the budget. " * 4] * 3
+        traits = build_story_voice([sample("f%d" % i, "report", text + str(i)) for i, text in enumerate(formal)], [], [],
+                                   "story", ["report"])["voice_profile"]["traits"]
+        self.assertTrue(any("Rarely uses contractions (0 of 3 samples)" in trait for trait in traits))
+
+    def test_possessives_dialogue_tags_and_abbreviations_are_not_misread(self):
+        formal = ["The committee's report was final. The chair's vote decided the matter after a long debate about the budget. " * 2 + str(i)
+                  for i in range(3)]
+        traits = build_story_voice([sample("f%d" % i, "report", text) for i, text in enumerate(formal)], [], [], "story", ["report"])["voice_profile"]["traits"]
+        self.assertFalse(any("Uses contractions naturally" in trait for trait in traits))
+        dialogue = ['"Ready?" she asked. We left at 9 a.m. and waited for the ferry until it came in late.',
+                    '"Now?" he said. The pier was empty... and the gulls had the whole place to themselves today.']
+        cadence = next(trait for trait in build_story_voice([sample("d%d" % i, "story", text) for i, text in enumerate(dialogue)],
+                                                            [], [], "story", ["story"])["voice_profile"]["traits"] if "Sentences average" in trait)
+        self.assertIn("Sentences average about 9 words", cadence)  # Not 2-word fragments split at "Ready?" or "a.m."
+
+    def test_topic_words_are_stemmed_consistently_and_generic_words_ignored(self):
+        samples = [sample("a", "essay", "I sent the messages before lunch.", created="2026-01-04"),
+                   sample("b", "essay", "Two weddings in one month wore us out.", created="2026-01-03"),
+                   sample("c", "essay", "My sisters drove up for the weekend.", created="2026-01-02")]
+        voice = build_story_voice(samples, [], [], "story", ["essay"], True, topic="my sister's wedding")
+        self.assertEqual(voice["voice_samples"], ["I sent the messages before lunch."])
+        # "messages" is a generic writing word, not a subject: the UI's own placeholder topic keeps that excerpt.
+        voice = build_story_voice(samples, [], [], "story", ["essay"], True, topic="an undo button for messages")
+        self.assertEqual(len(voice["voice_samples"]), 3)
+
+    def test_regular_punctuation_is_reported_with_a_rate(self):
+        texts = ["It worked — mostly. Then it didn't.", "Fine — I said so. Later, maybe.", "Close — but no. We tried again."]
+        voice = build_story_voice([sample("p%d" % i, "essay", text) for i, text in enumerate(texts)], [], [], "story", ["essay"])
+        punctuation = next(trait for trait in voice["voice_profile"]["traits"] if "Punctuation used regularly" in trait)
+        self.assertIn("em dashes (in 3 of 3 samples, about", punctuation)
+        self.assertEqual(voice["voice_profile"]["avoid"], [])  # Three samples are too few to state an absence.
+
+    def test_facts_are_opt_in_confirmed_channel_scoped_and_make_version_two(self):
+        lessons = [lesson("l", "long-form writing", "2026-01-01", guidance="Short paragraphs.")]
+        priors = [prior("p1", "long-form writing", "I led a six-person support tools team in 2025.", created="2026-01-02"),
+                  prior("p2", "long-form writing", "Unconfirmed claim.", confirmed=False),
+                  prior("p3", "personal chat", "Lives near the river.")]
+        without = build_story_voice([], [], lessons, "story", ["long-form writing"], priors=priors)
+        self.assertEqual(without["version"], 1)
+        self.assertNotIn("facts", without)
+        self.assertNotIn("six-person", json.dumps(without))
+        voice = build_story_voice([], [], lessons, "story", ["long-form writing"], priors=priors, include_facts=True)
+        self.assertEqual(voice["version"], 2)
+        self.assertEqual(voice["facts"], ["Background: I led a six-person support tools team in 2025."])
+        self.assertEqual(list(voice)[:5], ["format", "version", "voice_profile", "voice_samples", "facts"])
+        self.assertEqual(voice["provenance"]["counts"]["facts_included"], 1)
+        dumped = json.dumps(voice)
+        for absent in ("Unconfirmed claim", "river"):
+            self.assertNotIn(absent, dumped)
+        self.assertNotIn("six-person", json.dumps(voice["voice_profile"]))
+        empty = build_story_voice([], [], lessons, "story", ["long-form writing"], include_facts=True)
+        self.assertNotIn("facts", empty)
+        self.assertTrue(any("no facts were included" in warning for warning in empty["provenance"]["warnings"]))
+        many = [prior("m%02d" % i, "long-form writing", "Fact %d." % i, created="2026-01-%02d" % (i + 1)) for i in range(15)]
+        capped = build_story_voice([], [], lessons, "story", ["long-form writing"], priors=many, include_facts=True)
+        self.assertEqual(len(capped["facts"]), story_bridge.MAX_FACTS)
+        self.assertEqual(capped["facts"][0], "Background: Fact 14.")
+
+    def test_topic_skips_same_subject_excerpts_and_is_never_saved(self):
+        samples = [sample("a", "essay", "Nobody could find the button on the bus.", created="2026-01-03"),
+                   sample("b", "essay", "The parser was never the hard part.", created="2026-01-02"),
+                   sample("c", "essay", "We shipped on a Thursday and slept on Friday.", created="2026-01-01")]
+        voice = build_story_voice(samples, [], [], "story", ["essay"], True, topic="An undo button for sent messages")
+        self.assertEqual(voice["voice_samples"], ["The parser was never the hard part.", "We shipped on a Thursday and slept on Friday."])
+        self.assertEqual(voice["provenance"]["counts"]["examples_skipped_for_topic"], 1)
+        self.assertNotIn("undo", json.dumps(voice))
+        self.assertTrue(any("Skipped 1 excerpt" in warning for warning in voice["provenance"]["warnings"]))
+        everything = build_story_voice(samples[:1], [], [], "story", ["essay"], True, topic="buttons")
+        self.assertEqual(everything["voice_samples"], [])
+        self.assertTrue(any("avoid the story's subject" in warning for warning in everything["provenance"]["warnings"]))
+        with self.assertRaises(ValueError):
+            build_story_voice(samples, [], [], "story", ["essay"], True, topic="x" * 301)
+
+    def test_story_channels_are_suggested_and_aliased(self):
+        lessons = [lesson("s", "Spoken stories", "2026-01-01", guidance="Say the decision plainly."),
+                   lesson("w", "work email", "2026-01-01", guidance="Brief.")]
+        sources = {item["channel"]: item for item in available_sources([], [], lessons)}
+        self.assertTrue(sources["spoken story"]["suggested"])
+        self.assertFalse(sources["work email"]["suggested"])
+        voice = build_story_voice([], [], lessons, "spoken interview answer", ["spoken story"])
+        self.assertEqual(voice["provenance"]["counts"]["lessons_used"], 1)
+
+    def test_holdout_pack_contains_only_held_out_confirmed_text_from_chosen_channels(self):
+        samples = [sample("h1", "essay", "Held out line one.\nSecond line kept.", held_out=True),
+                   sample("h2", "work email", "Other channel held out.", held_out=True),
+                   sample("h3", "essay", "Held but pending.", status="pending", held_out=True),
+                   sample("ok", "essay", "Training text.")]
+        samples[0]["context"]["audience"] = "friend"
+        pack = story_bridge.build_holdout_pack(samples, ["essay"])
+        self.assertEqual((pack["format"], pack["version"]), ("voicework.holdout", 1))
+        self.assertEqual(pack["items"], [{"id": "h1", "context": "essay · audience: friend", "text": "Held out line one.\nSecond line kept."}])
+        voice = build_story_voice(samples, [], [], "story", ["essay"], True)
+        self.assertNotIn("Held out", json.dumps(voice))
+
+    def test_holdout_pack_fits_story_engine_limits(self):
+        long_context = {"channel": "essay", "audience": "a" * 120, "intent": "b" * 120, "relationship": "c" * 120,
+                        "stakes": "d" * 120, "scenario": "e" * 160}
+        samples = [dict(sample("h%02d" % i, "essay", "Held piece %d." % i, held_out=True, created="2026-01-%02d" % (i % 28 + 1)),
+                        context=long_context) for i in range(55)]
+        pack = story_bridge.build_holdout_pack(samples, ["essay"])
+        self.assertEqual(len(pack["items"]), story_bridge.MAX_HOLDOUT_ITEMS)
+        self.assertEqual(pack["total_held_out"], 55)
+        self.assertTrue(all(len(item["context"]) <= 300 for item in pack["items"]))
+        self.assertEqual(pack["items"][0]["text"], "Held piece 27.")  # Newest first (created 2026-01-28).
+
+
 class StoryBridgeApiTests(unittest.TestCase):
     setUp = test_server.ServerTests.setUp
     tearDown = test_server.ServerTests.tearDown
@@ -164,6 +334,59 @@ class StoryBridgeApiTests(unittest.TestCase):
         self.assertIn("utilize", json.loads(output.read_text())["voice_profile"]["avoid"][0])
         with redirect_stderr(StringIO()):
             self.assertEqual(story_bridge.main(["--data-dir", str(Path(self.temp.name) / "missing"), "--list"]), 2)
+
+    def test_export_route_and_cli_add_facts_topic_and_holdout_pack(self):
+        self.request("POST", "/api/language-lessons", {"context": {"channel": "essay"}, "dimension": "rhythm",
+                                                       "guidance": "Land the point in a short sentence."})
+        prior = self.request("POST", "/api/priors", {"label": "Work", "text": "I maintain a field-service search tool.",
+                                                     "context": {"channel": "essay"}, "source": "test"})[1]["prior"]
+        self.request("PATCH", "/api/priors/" + prior["id"], {"confirmed": True})
+        ids = []
+        for text in ("I fixed the sync on a Tuesday. It held.", "Nobody read the manual, so I moved the button.",
+                     "Held-out synthetic line for evaluation."):
+            ident = self.request("POST", "/api/samples", {"title": text[:20], "text": text, "context": {"channel": "essay"}})[1]["sample"]["id"]
+            self.request("PATCH", "/api/samples/" + ident, {"status": "confirmed"})
+            ids.append(ident)
+        self.request("PATCH", "/api/samples/" + ids[2], {"held_out": True})
+        status, value, _ = self.request("GET", "/api/export/story-engine?target=story&channel=essay&examples=1&facts=1&topic=the+button")
+        self.assertEqual(status, 200)
+        voice = value["story_voice"]
+        self.assertEqual(voice["version"], 2)
+        self.assertEqual(voice["facts"], ["Work: I maintain a field-service search tool."])
+        self.assertEqual(voice["voice_samples"], ["I fixed the sync on a Tuesday. It held."])
+        self.assertNotIn("Held-out synthetic", json.dumps(voice))
+        self.assertEqual(self.request("GET", "/api/export/story-engine?target=x&channel=essay&facts=1&facts=1")[0], 400)
+        self.assertEqual(self.request("GET", "/api/export/story-engine?target=x&channel=essay&topic=" + "x" * 301)[0], 400)
+
+        data_dir = Path(self.temp.name) / "data"
+        output, holdout = Path(self.temp.name) / "voice.json", Path(self.temp.name) / "holdout.json"
+        with redirect_stderr(StringIO()) as stderr:
+            self.assertEqual(story_bridge.main(["--data-dir", str(data_dir), "--target", "story", "--channel", "essay",
+                                                "--facts", "--output", str(output), "--holdout-output", str(holdout)]), 0)
+        self.assertIn("1 held-out samples", stderr.getvalue())
+        self.assertEqual(os.stat(holdout).st_mode & 0o777, 0o600)
+        pack = json.loads(holdout.read_text())
+        self.assertEqual([item["text"] for item in pack["items"]], ["Held-out synthetic line for evaluation."])
+        self.assertNotIn("Held-out synthetic", output.read_text())
+        self.assertEqual(json.loads(output.read_text())["version"], 2)
+        # An existing destination refuses before anything is written.
+        fresh = Path(self.temp.name) / "fresh.json"
+        with redirect_stderr(StringIO()):
+            self.assertEqual(story_bridge.main(["--data-dir", str(data_dir), "--target", "story", "--channel", "essay",
+                                                "--output", str(fresh), "--holdout-output", str(holdout)]), 2)
+            self.assertEqual(story_bridge.main(["--data-dir", str(data_dir), "--target", "story", "--channel", "work email",
+                                                "--holdout-output", str(Path(self.temp.name) / "none.json")]), 2)
+        self.assertFalse(fresh.exists())
+        same = Path(self.temp.name) / "same.json"
+        missing_dir = Path(self.temp.name) / "missing" / "holdout.json"
+        with redirect_stderr(StringIO()) as stderr:
+            self.assertEqual(story_bridge.main(["--data-dir", str(data_dir), "--target", "story", "--channel", "essay",
+                                                "--output", str(same), "--holdout-output", str(same)]), 2)
+            self.assertEqual(story_bridge.main(["--data-dir", str(data_dir), "--target", "story", "--channel", "essay",
+                                                "--output", str(fresh), "--holdout-output", str(missing_dir)]), 2)
+        self.assertIn("must be different files", stderr.getvalue())
+        self.assertFalse(same.exists())
+        self.assertFalse(fresh.exists())  # The voice file is removed when the holdout file cannot be written.
 
 
 if __name__ == "__main__":

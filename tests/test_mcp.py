@@ -83,6 +83,17 @@ class MCPUnitTests(unittest.TestCase):
         voice = self.call("get_story_voice", {"target": "spoken interview answer", "channels": ["work"]})
         self.assertEqual(voice["structuredContent"]["format"], "voicework.story-voice")
         self.assertNotIn("lowercase", json.dumps(voice["structuredContent"]))
+        self.assertNotIn("Synthetic prior fact", json.dumps(voice["structuredContent"]))
+        self.assertEqual(voice["structuredContent"]["version"], 1)
+        full = self.call("get_story_voice", {"target": "true story told aloud", "channels": ["work"], "include_facts": True,
+                                             "include_examples": True, "topic": "garden"})
+        self.assertFalse(full["isError"])
+        self.assertEqual(full["structuredContent"]["version"], 2)
+        self.assertEqual(full["structuredContent"]["facts"], ["Background: Synthetic prior fact."])
+        self.assertEqual(full["structuredContent"]["voice_samples"], [])  # The only excerpt is about a garden shed.
+        self.assertIn("1 facts", full["content"][0]["text"])
+        self.assertTrue(self.call("get_story_voice", {"target": "story", "channels": ["work"], "include_facts": "yes"})["isError"])
+        self.assertTrue(self.call("get_story_voice", {"target": "story", "channels": ["work"], "topic": 5})["isError"])
 
     def test_proposals_are_pending_and_do_not_change_lessons(self):
         before = LanguageLessonStore(self.path).list()

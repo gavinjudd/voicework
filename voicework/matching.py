@@ -35,6 +35,9 @@ ALIAS_GROUPS = {
         # "website" stays literal, since company and marketing sites differ.
         ("personal website", "personal site", "personal website copy", "portfolio website",
          "portfolio site"),
+        # Corrections made while telling stories (Story Engine proposes these).
+        ("spoken story", "spoken stories"),
+        ("written story", "written stories"),
     ),
     "audience": _PEOPLE + (("public", "general public", "public audience"),),
     "relationship": _PEOPLE + (

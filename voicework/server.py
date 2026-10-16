@@ -343,10 +343,14 @@ class Handler(BaseHTTPRequestHandler):
                     markdown += "\n" + "\n".join("> " + line.replace("<", "&lt;").replace(">", "&gt;") for line in json.dumps(packet, ensure_ascii=False, indent=2).splitlines()) + "\n"
             return self._json({"markdown": markdown, "filename": "VOICE_PROFILE.md"})
         if method == "GET" and path == "/api/export/story-engine":
-            if set(query) - {"target", "channel", "examples"} or any(len(query.get(key, [])) > 1 for key in ("target", "examples")):
-                raise HTTPError(400, "Use target once, channel one or more times, and optional examples=1")
+            if (set(query) - {"target", "channel", "examples", "facts", "topic"} or
+                    any(len(query.get(key, [])) > 1 for key in ("target", "examples", "facts", "topic"))):
+                raise HTTPError(400, "Use target once, channel one or more times, and optional examples=1, facts=1 and topic")
+            include_facts = query.get("facts") == ["1"]
             voice = build_story_voice(store.samples(), store.feedback(), self.server.language_lessons.list(),
-                                      query.get("target", [""])[0], query.get("channel", []), query.get("examples") == ["1"])
+                                      query.get("target", [""])[0], query.get("channel", []), query.get("examples") == ["1"],
+                                      priors=self.server.priors.list(confirmed_only=True) if include_facts else (),
+                                      include_facts=include_facts, topic=query.get("topic", [""])[0])
             return self._json({"story_voice": voice, "filename": "story-voice.json"})
         if method == "GET" and path == "/api/corrections":
             return self._json({"corrections": self.server.corrections.list()})

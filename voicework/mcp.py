@@ -54,11 +54,14 @@ TOOLS = [
                      "required": ["channel"], "additionalProperties": False},
      "annotations": {"readOnlyHint": True, "openWorldHint": False}},
     {"name": "get_story_voice",
-     "description": "Build a Story Engine voice file (voicework.story-voice v1) from chosen channels, for telling stories in the user's voice.",
+     "description": "Build a Story Engine voice file (voicework.story-voice) from chosen channels, for telling stories in the user's voice. "
+                    "Prefer story channels (spoken story, written story) when they exist. Use voice_profile and voice_samples as style only, never as story material.",
      "inputSchema": {"type": "object", "properties": {
          "target": {"type": "string", "maxLength": 200, "description": "Where the story voice is used, e.g. 'spoken interview answer'."},
          "channels": {"type": "array", "items": {"type": "string", "maxLength": 200}, "minItems": 1, "maxItems": 12},
-         "include_examples": {"type": "boolean", "default": False}},
+         "include_examples": {"type": "boolean", "default": False, "description": "Include up to 5 confirmed excerpts. Only when the user wants them shared with you."},
+         "topic": {"type": "string", "maxLength": 300, "description": "The story's subject in a few words. Excerpts sharing its words are skipped; the topic is not stored."},
+         "include_facts": {"type": "boolean", "default": False, "description": "Include confirmed prior packets from these channels as facts (version 2 file). They may contain personal facts; only when the user wants their background used, e.g. for a true story."}},
          "required": ["target", "channels"], "additionalProperties": False},
      "annotations": {"readOnlyHint": True, "openWorldHint": False}},
     {"name": "propose_lesson",
@@ -112,7 +115,7 @@ class VoiceworkMCP:
         lines = ["Channels with reviewed evidence:"]
         for item in sources:
             lines.append("- %s: %d lessons, %d practice notes, %d confirmed samples%s" % (
-                item["label"], item["lessons"], item["feedback"], item["samples"], " (broad long-form defaults)" if item["suggested"] else ""))
+                item["label"], item["lessons"], item["feedback"], item["samples"], " (suggested for stories)" if item["suggested"] else ""))
         return "\n".join(lines), {"channels": sources}
 
     def get_voice_guidance(self, arguments):
@@ -168,11 +171,15 @@ class VoiceworkMCP:
         channels = arguments.get("channels")
         if not isinstance(channels, list) or not 1 <= len(channels) <= 12:
             raise ToolError("channels must list 1 to 12 channel names")
+        include_facts = _bool(arguments, "include_facts")
         voice = build_story_voice(self.store.samples(), self.store.feedback(), self.lessons.list(),
-                                  arguments.get("target"), channels, _bool(arguments, "include_examples"))
+                                  arguments.get("target"), channels, _bool(arguments, "include_examples"),
+                                  priors=self.priors.list(confirmed_only=True) if include_facts else (),
+                                  include_facts=include_facts, topic=arguments.get("topic"))
         counts = voice["provenance"]["counts"]
-        summary = "Story Engine voice file: %d traits, %d avoid, %d excerpts. Pass it to Story Engine as --voice-profile, or follow its voice_profile directly." % (
-            counts["traits"], counts["avoid"], counts["examples_included"])
+        summary = ("Story Engine voice file: %d traits, %d avoid, %d excerpts, %d facts. Pass it to Story Engine as --voice-profile, "
+                   "or follow its voice_profile, voice_samples and facts directly." % (
+                       counts["traits"], counts["avoid"], counts["examples_included"], counts["facts_included"]))
         return summary + "\n\n" + json.dumps(voice, ensure_ascii=False, indent=2), voice
 
     def propose_lesson(self, arguments):
