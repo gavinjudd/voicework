@@ -22,6 +22,9 @@ wording, punctuation, capitalization and line habits are measured separately
 for each channel from its confirmed, non-held-out samples, and keep that
 channel as their scope. Held-out samples can be exported on their own as an
 evaluation pack (``voicework.holdout``); they never enter a voice file.
+Writing addressed to an AI assistant (by its audience or relationship label) is
+left out by default: prompts are a different register from the human-facing
+writing a story voice is for.
 Nothing here calls a model or claims a measured voice match.
 """
 import argparse
@@ -112,8 +115,25 @@ def _channel_key(context):
     return normalize_label("channel", (context or {}).get("channel", "work"))
 
 
-def _usable_sample(sample):
-    return sample.get("status") == "confirmed" and not sample.get("held_out", False)
+# A whole audience or relationship label that names an AI tool ("writing assistant",
+# "ChatGPT", "user to writing assistant"). Human audiences that mention AI, such as
+# "AI researchers", a bare "assistant", and names people also have ("Claude") stay in. Prompts to an assistant are a
+# different register from writing for people, which is what a story voice is for.
+_AI_ADDRESSEE = re.compile(
+    r"(?:user\s+to\s+)?(?:an?\s+|the\s+|my\s+)?(?:ai|a\.i\.|chatgpt|gpt(?:-?\d+)?|llm|(?:large\s+)?language\s+model|"
+    r"chatbot|bot|(?:ai|writing|ai\s+writing)\s+assistant|ai\s+(?:model|tool)|claude\s+(?:ai|code)|github\s+copilot|"
+    r"codex\s+cli)", re.I)
+
+
+def addressed_to_ai(context):
+    context = context or {}
+    return any(_AI_ADDRESSEE.fullmatch(" ".join(str(context.get(field) or "").split()))
+               for field in ("audience", "relationship"))
+
+
+def _usable_sample(sample, include_ai=False):
+    return (sample.get("status") == "confirmed" and not sample.get("held_out", False) and
+            (include_ai or not addressed_to_ai(sample.get("context"))))
 
 
 def available_sources(samples, feedback, lessons):
@@ -397,7 +417,7 @@ def select_channels(channels):
 
 
 def build_story_voice(samples, feedback, lessons, target, channels, include_examples=False, now=None, *,
-                      priors=(), include_facts=False, topic=None):
+                      priors=(), include_facts=False, topic=None, include_ai_addressed=False):
     """Return the envelope; raises ValueError for a missing target or channel."""
     target = validate_target(target)
     topic = validate_topic(topic)
@@ -407,7 +427,11 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
     labels = [sources[key]["label"] if key in sources else key for key in selected]
 
     def chosen(context):
-        return _channel_key(context) in selected
+        return _channel_key(context) in selected and (include_ai_addressed or not addressed_to_ai(context))
+
+    ai_addressed = sum(1 for item in [*lessons, *feedback, *(s for s in samples if s.get("status") == "confirmed"
+                                                              and not s.get("held_out", False))]
+                       if _channel_key(item.get("context")) in selected and addressed_to_ai(item.get("context")))
 
     traits, avoid, seen_traits, seen_avoid = [], [], set(), set()
     used_lessons, used_feedback = [], []
@@ -446,7 +470,7 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
         if len(notes) + len(presentation) > before:
             used_feedback.append(entry.get("id"))
 
-    measured = [sample for sample in samples if _usable_sample(sample) and chosen(sample.get("context"))]
+    measured = [sample for sample in samples if _usable_sample(sample, include_ai_addressed) and chosen(sample.get("context"))]
     measured.sort(key=lambda sample: sample.get("created_at", ""), reverse=True)
     per_channel, pattern_avoid = [], []
     for key, label in zip(selected, labels):
@@ -505,6 +529,9 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
             " that avoid the story's subject" if skipped_for_topic else ""))
     elif skipped_for_topic:
         warnings.append("Skipped %d excerpt(s) that share subject words with the story topic." % skipped_for_topic)
+    if ai_addressed and not include_ai_addressed:
+        warnings.append("Left out %d sample(s), lesson(s) or practice note(s) addressed to an AI assistant; prompts are a "
+                        "different register from writing for people." % ai_addressed)
     if include_facts and not facts:
         warnings.append("No confirmed prior packets in the selected channels; no facts were included.")
     if fact_count > MAX_FACTS:
@@ -534,6 +561,7 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
         "channels": labels,
         "counts": {"lessons_used": len(used_lessons), "feedback_used": len(used_feedback),
                    "samples_measured": len(measured), "examples_included": len(examples),
+                   "ai_addressed_left_out": 0 if include_ai_addressed else ai_addressed,
                    "examples_skipped_for_topic": skipped_for_topic, "facts_included": len(facts),
                    "traits": len(final_traits), "avoid": len(final_avoid)},
         "lesson_ids": [ident for ident in used_lessons if ident],
@@ -544,7 +572,7 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
     return result
 
 
-def build_holdout_pack(samples, channels, now=None):
+def build_holdout_pack(samples, channels, now=None, include_ai_addressed=False):
     """Held-out confirmed samples from the chosen channels, for a blind voice evaluation.
 
     This is the only export that contains held-out text. It is evaluation
@@ -553,8 +581,10 @@ def build_holdout_pack(samples, channels, now=None):
     """
     selected = select_channels(channels)
     labels, items = {}, []
+    # Measure the voice where it is used: writing for people, not prompts to an assistant.
     held = [sample for sample in samples if sample.get("status") == "confirmed" and sample.get("held_out") is True
-            and _channel_key(sample.get("context")) in selected]
+            and _channel_key(sample.get("context")) in selected
+            and (include_ai_addressed or not addressed_to_ai(sample.get("context")))]
     for sample in sorted(held, key=lambda sample: sample.get("created_at", ""), reverse=True)[:MAX_HOLDOUT_ITEMS]:
         key = _channel_key(sample.get("context"))
         labels.setdefault(key, (sample.get("context") or {}).get("channel") or key)
@@ -600,6 +630,8 @@ def main(argv=None):
     parser.add_argument("--facts", action="store_true",
                         help="Include confirmed prior packets from these channels as facts (for true stories); makes a version 2 file")
     parser.add_argument("--output", help="New file to create (mode 0600); omit for stdout")
+    parser.add_argument("--include-ai-addressed", action="store_true",
+                        help="Also use samples, lessons and held-out pieces addressed to an AI assistant (left out by default)")
     parser.add_argument("--holdout-output",
                         help="Also write this new file (mode 0600) with held-out confirmed samples from these channels, for story_engine.py voice-eval")
     args = parser.parse_args(argv)
@@ -614,10 +646,11 @@ def main(argv=None):
                     item["label"], "  (suggested)" if item["suggested"] else "", item["lessons"], item["feedback"], item["samples"]))
             return 0
         result = build_story_voice(samples, feedback, lessons, args.target, args.channel or [], args.examples,
-                                   priors=priors, include_facts=args.facts, topic=args.topic)
+                                   priors=priors, include_facts=args.facts, topic=args.topic,
+                                   include_ai_addressed=args.include_ai_addressed)
         holdout = None
         if args.holdout_output:
-            holdout = build_holdout_pack(samples, args.channel or [])
+            holdout = build_holdout_pack(samples, args.channel or [], include_ai_addressed=args.include_ai_addressed)
             if not holdout["items"]:
                 raise ValueError("No held-out confirmed samples in these channels. Mark a few confirmed samples as "
                                  "held out in Voicework → Samples first.")

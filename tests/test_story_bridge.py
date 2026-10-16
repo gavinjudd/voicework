@@ -236,6 +236,31 @@ class StoryBridgeMeasurementTests(unittest.TestCase):
         voice = build_story_voice(samples, [], [], "story", ["essay"], True, topic="an undo button for messages")
         self.assertEqual(len(voice["voice_samples"]), 3)
 
+    def test_writing_addressed_to_an_ai_assistant_is_left_out_by_default(self):
+        to_ai = {"channel": "work", "audience": "writing assistant", "relationship": "user to writing assistant"}
+        samples = [dict(sample("ai%d" % i, "work", "Fix the wording on option A. Keep it short. Max effort."), context=to_ai)
+                   for i in range(3)]
+        samples += [sample("p%d" % i, "work", "Thanks for the notes. I moved the meeting to Friday. See you then.") for i in range(2)]
+        samples += [dict(sample("h1", "work", "Rewrite this prompt for me.", held_out=True), context=to_ai),
+                    sample("h2", "work", "Running late, start without me.", held_out=True)]
+        lessons = [lesson("ai", "work", "2026-01-02", guidance="Write prompts as bullet lists.", context={"audience": "ChatGPT"}),
+                   lesson("ok", "work", "2026-01-01", guidance="State the decision plainly.",
+                          context={"audience": "AI researchers"})]
+        voice = build_story_voice(samples, [], lessons, "story", ["work"], True)
+        dumped = json.dumps(voice)
+        self.assertNotIn("Max effort", dumped)
+        self.assertNotIn("bullet lists", dumped)
+        self.assertIn("State the decision plainly", dumped)  # A human audience that mentions AI stays in.
+        self.assertEqual(voice["provenance"]["counts"]["samples_measured"], 2)
+        self.assertEqual(voice["provenance"]["counts"]["ai_addressed_left_out"], 4)
+        self.assertTrue(any("addressed to an AI assistant" in warning for warning in voice["provenance"]["warnings"]))
+        pack = story_bridge.build_holdout_pack(samples, ["work"])
+        self.assertEqual([item["id"] for item in pack["items"]], ["h2"])
+        everything = build_story_voice(samples, [], lessons, "story", ["work"], True, include_ai_addressed=True)
+        self.assertEqual(everything["provenance"]["counts"]["samples_measured"], 5)
+        self.assertIn("Max effort", json.dumps(everything))
+        self.assertEqual(len(story_bridge.build_holdout_pack(samples, ["work"], include_ai_addressed=True)["items"]), 2)
+
     def test_regular_punctuation_is_reported_with_a_rate(self):
         texts = ["It worked — mostly. Then it didn't.", "Fine — I said so. Later, maybe.", "Close — but no. We tried again."]
         voice = build_story_voice([sample("p%d" % i, "essay", text) for i, text in enumerate(texts)], [], [], "story", ["essay"])
