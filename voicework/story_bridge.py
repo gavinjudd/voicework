@@ -25,6 +25,7 @@ evaluation pack (``voicework.holdout``); they never enter a voice file.
 Nothing here calls a model or claims a measured voice match.
 """
 import argparse
+import itertools
 import json
 import os
 import re
@@ -40,6 +41,8 @@ VERSION = 1
 FACTS_VERSION = 2
 HOLDOUT_FORMAT = "voicework.holdout"
 MAX_TRAITS = 32
+# Slots kept for habits measured from samples, so a large set of lessons cannot crowd them out.
+MEASURED_SLOTS = 8
 MAX_AVOID = 24
 MAX_EXAMPLES = 5
 MAX_EXAMPLE_CHARS = 1500
@@ -445,17 +448,22 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
 
     measured = [sample for sample in samples if _usable_sample(sample) and chosen(sample.get("context"))]
     measured.sort(key=lambda sample: sample.get("created_at", ""), reverse=True)
-    patterns, pattern_avoid = [], []
+    per_channel, pattern_avoid = [], []
     for key, label in zip(selected, labels):
         channel_traits, channel_avoid = _measured_traits(
             [sample for sample in measured if _channel_key(sample.get("context")) == key], label)
-        patterns += channel_traits
+        per_channel.append(channel_traits)
         for item in channel_avoid:
             _add(pattern_avoid, seen_avoid, item)
+    # Interleave channels so each keeps its most telling measurements (cadence first) when space is short.
+    patterns = [trait for group in itertools.zip_longest(*per_channel) for trait in group if trait]
 
-    # Explicit user teaching outranks inferred measurements when space is short.
-    candidates = traits + notes + presentation + patterns
-    final_traits = candidates[:MAX_TRAITS]
+    # Explicit user teaching outranks inferred measurements when space is short, but measured
+    # habits keep up to MEASURED_SLOTS places: they are what the samples actually show.
+    taught = traits + notes + presentation
+    candidates = taught + patterns
+    final_traits = taught[:MAX_TRAITS - min(len(patterns), MEASURED_SLOTS)]
+    final_traits += patterns[:MAX_TRAITS - len(final_traits)]
     avoid_candidates = avoid + pattern_avoid
     final_avoid = avoid_candidates[:MAX_AVOID]
 
@@ -488,7 +496,8 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
         warnings.append("The selected channels have no enabled lessons, practice notes, story-relevant presentation "
                         "preferences, or two confirmed samples. voice_profile is null; Story Engine will use its default voice.")
     if len(candidates) > MAX_TRAITS:
-        warnings.append("Kept the %d highest-priority traits of %d (broadest, then newest, explicit lessons first)." % (MAX_TRAITS, len(candidates)))
+        warnings.append("Kept the %d highest-priority traits of %d (broadest, then newest, explicit lessons first; "
+                        "up to %d measured habits are always kept)." % (MAX_TRAITS, len(candidates), MEASURED_SLOTS))
     if len(avoid_candidates) > MAX_AVOID:
         warnings.append("Kept %d of %d avoid entries." % (MAX_AVOID, len(avoid_candidates)))
     if include_examples and not examples:

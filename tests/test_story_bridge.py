@@ -99,9 +99,28 @@ class StoryBridgeUnitTests(unittest.TestCase):
                    for index in range(40)]
         samples = [sample("s%d" % index, "essay", "One sentence here. Another one.") for index in range(3)]
         voice = build_story_voice(samples, [], lessons, "short story", ["essay"])
-        self.assertEqual(len(voice["voice_profile"]["traits"]), story_bridge.MAX_TRAITS)
-        self.assertFalse(any("Sentences average" in trait for trait in voice["voice_profile"]["traits"]))
+        traits = voice["voice_profile"]["traits"]
+        self.assertEqual(len(traits), story_bridge.MAX_TRAITS)
+        measured = [trait for trait in traits if trait.startswith("[observed in")]
+        # Measured habits keep their reserved places; lessons fill the rest, broadest and newest first.
+        self.assertTrue(1 <= len(measured) <= story_bridge.MEASURED_SLOTS)
+        self.assertTrue(any("Sentences average" in trait for trait in measured))
+        self.assertEqual(len(traits) - len(measured), story_bridge.MAX_TRAITS - len(measured))
+        self.assertTrue(all(not trait.startswith("[observed in") for trait in traits[:story_bridge.MAX_TRAITS - len(measured)]))
         self.assertTrue(any("highest-priority" in warning for warning in voice["provenance"]["warnings"]))
+
+    def test_reserved_measurements_are_shared_across_channels(self):
+        lessons = [lesson("l%02d" % index, "chat", "2026-01-%02d" % (index % 28 + 1), guidance="Habit %d." % index) for index in range(40)]
+        samples = ([sample("c%d" % i, "chat", text) for i, text in enumerate(CHAT)] +
+                   [sample("e%d" % i, "essay", text) for i, text in enumerate(ESSAY)])
+        available = build_story_voice(samples, [], [], "story", ["chat", "essay"])["voice_profile"]["traits"]
+        traits = build_story_voice(samples, [], lessons, "story", ["chat", "essay"])["voice_profile"]["traits"]
+        measured = [trait for trait in traits if trait.startswith("[observed in")]
+        self.assertEqual(len(measured), min(len(available), story_bridge.MEASURED_SLOTS))
+        self.assertEqual(len(traits), story_bridge.MAX_TRAITS)
+        self.assertTrue(any("· chat]" in trait for trait in measured) and any("· essay]" in trait for trait in measured))
+        self.assertTrue(measured[0].startswith("[observed in 4 confirmed samples · chat] Sentences average"))
+        self.assertTrue(measured[1].startswith("[observed in 3 confirmed samples · essay] Sentences average"))
 
     def test_long_examples_are_excerpted_and_text_is_sanitized(self):
         long_text = ("A sentence that keeps going. " * 120) + "\x07"
