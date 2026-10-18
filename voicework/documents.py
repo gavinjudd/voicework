@@ -11,6 +11,7 @@ import json
 import math
 import re
 from collections import Counter
+from .numeric import NUMBER
 from .live import LIVE_PROVIDERS
 from .document_decisions import classifier_context
 from .document_wording import (instruction_plan, batch_instructions, unmet_batch,
@@ -35,7 +36,6 @@ MAX_SOURCE_VOICE_PHRASES = 12
 REVIEW_LIMITATION = ('Checks compare this draft with the supplied source and contextual guidance. '
                      'They do not verify source facts, prove meaning is preserved, or measure voice accuracy.')
 URL = re.compile(r'(?:https?://|mailto:|www\.)[^\s<>"\]]+', re.I)
-NUMBER = re.compile(r'(?<!\w)[+\-−]?(?:\d[\d,]*(?:\.\d+)?)(?:%|‰)?(?!\w)')
 CITATION = re.compile(r'\[(?:\^?\d[\d,;\s–\-]*|\^[\w-]+|@[^\]\n]+|[A-Z][^\]\n]{0,100}\b\d{4}[a-z]?[^\]\n]{0,30})\]')
 INLINE_CODE = re.compile(r'(`+)([^`\n]+)\1')
 

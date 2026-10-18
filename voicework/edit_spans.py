@@ -1,8 +1,9 @@
 """Exact edit spans with sentence/clause context kept separately."""
 import difflib
 import re
+from .numeric import NUMBER
 
-TOKEN = re.compile(r"(?<!\w)[+\-−]?(?:\d[\d,]*(?:\.\d+)?)(?:%|‰)?(?!\w)|\w+(?:['’]\w+)*|[^\w\s]")
+TOKEN = re.compile(NUMBER.pattern + r"|\w+(?:['’]\w+)*|[^\w\s]")
 END = re.compile(r'''[.!?]["”’')\]]*(?=\s|$)|\r?\n[ \t]*\r?\n''')
 FUNCTION_WORDS = frozenset('a an the and or but of to in on at for from with by as is are was were be been it its this that these those i we you he she they my our your his her their not no'.split())
 

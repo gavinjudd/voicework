@@ -122,6 +122,28 @@ def meaning_report(plans, omitted, verdicts, semantic_complete):
             'semantic_complete': semantic_complete, 'notice': NOTICE}
 
 
+def _numeric_attribution(ids, checks, pattern, difference):
+    """Attribute residual numeric differences, not balanced clause moves.
+
+    Complete span coverage is checked by the caller first. A token that is
+    both added and removed could be a relocation beside a real change to the
+    same number. Keep that alarm independent rather than guess which edit
+    caused it. Semantic assessments remain independent of this token test.
+    """
+    residual = {token: count for token, count in difference.items() if count}
+    deltas = {}
+    for ident in ids:
+        delta = _counts(checks[ident]['draft_quote'], pattern)
+        delta.subtract(_counts(checks[ident]['source_quote'], pattern))
+        deltas[ident] = delta
+    for token in residual:
+        values = [delta[token] for delta in deltas.values()]
+        if any(value > 0 for value in values) and any(value < 0 for value in values):
+            return []
+    return [ident for ident in ids
+            if any(deltas[ident][token] * count > 0 for token, count in residual.items())]
+
+
 def consolidate_content(deterministic, semantic, report, number_pattern, batches):
     """Group only explicit or locally validated attribution; no fuzzy merge."""
     checks = {item['change_id']: item for item in report['checks']}
@@ -155,6 +177,8 @@ def consolidate_content(deterministic, semantic, report, number_pattern, batches
             if ((not lexical and report['omitted']) or (lexical and not report['semantic_complete'])
                     or {k: v for k, v in difference.items() if v} != {k: v for k, v in covered.items() if v}):
                 ids = []
+            elif not lexical:
+                ids = _numeric_attribution(ids, checks, pattern, difference)
         lexical = code in ('negation_changed', 'commitment_changed')
         record(issue, 'deterministic', ids, not lexical or not ids)
     for issue in semantic:
