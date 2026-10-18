@@ -581,7 +581,7 @@ class Handler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/feedback":
             feedback = store.add_feedback(body)
             return self._json({"feedback": feedback, "profile": build_profile(store.samples(), store.feedback(), self.server.language_lessons.list())}, 201)
-        if method == "GET" and path in {"/", "/index.html", "/app.js", "/styles.css", "/correction-diff.mjs", "/voice-confidence.mjs", "/document-state.mjs", "/preference-learner.mjs", "/preference-learner.css", "/identity-profile.mjs", "/identity-profile.css"}:
+        if method == "GET" and path in {"/", "/index.html", "/app.js", "/styles.css", "/correction-diff.mjs", "/voice-confidence.mjs", "/document-state.mjs", "/reviewed-decisions.mjs", "/preference-learner.mjs", "/preference-learner.css", "/identity-profile.mjs", "/identity-profile.css"}:
             name = "index.html" if path == "/" else path[1:]
             asset = self.server.web_root / name
             if not asset.is_file() or asset.is_symlink():

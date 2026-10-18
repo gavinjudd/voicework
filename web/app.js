@@ -2,6 +2,7 @@ import {renderIdentityProfiles, seedIdentitySource} from './identity-profile.mjs
 import {renderPreferenceLearner, seedPreferenceEvidence, canTeachComparison, canTeachPractice} from './preference-learner.mjs';
 import {changedSpan, hasSimilarScope, correctionScopeSummary} from './correction-diff.mjs';
 import {confidenceView, pendingSampleCounts} from './voice-confidence.mjs';
+import {reviewedEditCandidate} from './reviewed-decisions.mjs';
 import {DOCUMENT_SOURCE_LIMIT, DOCUMENT_OUTPUT_LIMIT, DOCUMENT_STORAGE_LIMIT, cleanDocumentContext, emptyDocument, restoreDocument, validDocumentJob, activeDocumentJob, documentChecksCurrent, reviseDocument, documentDecisionChanged, acceptDocumentJob, documentDownloadName} from './document-state.mjs';
 const app = document.querySelector('#app');
 const toastRegion = document.querySelector('#toast-region');
@@ -768,6 +769,30 @@ function keepDocumentWordingButton(item, current, checking) {
   keep.disabled = !current || checking || !item.source_quote || !item.draft_quote;
   return keep;
 }
+function keepReviewedDifference(issue, checks, current, checking) {
+  const assessment = reviewedEditCandidate(issue, checks);
+  if (!assessment) return null;
+  const host = el('div', {});
+  const preview = button('Review keeping this difference', () => busy(preview, async () => {
+    const request = documentDecisionRequest();
+    const response = await api('/document-decisions/reviewed/preview', 'POST', {...request, finding: issue, assessment});
+    if (JSON.stringify(request) !== JSON.stringify(documentDecisionRequest())) return;
+    const reason = el('textarea', {rows: 2, maxlength: 1000, 'aria-label': 'Reason for keeping reviewed difference',
+      value: 'I reviewed this difference and want to keep this wording in this article.'});
+    const save = button('Keep this reviewed difference for this article', () => busy(save, async () => {
+      if (JSON.stringify(request) !== JSON.stringify(documentDecisionRequest())) throw new Error('The article changed. Run checks again before saving.');
+      const saved = await api('/document-decisions/reviewed', 'POST', {...request, finding: issue, assessment, reason: reason.value});
+      ui.documentDecisions = JSON.stringify(request) === JSON.stringify(documentDecisionRequest()) ? saved.decisions : null;
+      ui.document = documentDecisionChanged(ui.document); persistDocument(); refreshDocumentDiagnostics();
+      toast('Reviewed difference saved for this article. Run checks again; independent findings remain open.');
+    }, 'Saving…'), 'small');
+    host.replaceChildren(el('p', {}, el('strong', {}, 'Before: '), response.preview.source_quote),
+      el('p', {}, el('strong', {}, 'Keep: '), response.preview.draft_quote),
+      helper('This accepts the specific reviewed difference; it does not declare the meaning identical. Changed wording, review context, semantic dimension and independent findings remain subject to review.'),
+      field('Why you want to keep it', reason), save);
+  }, 'Loading…'), 'small');
+  preview.disabled = !current || checking; host.append(preview); return host;
+}
 function documentDecisionPanel(current, checking) {
   const snapshot = ui.documentDecisions || (current ? ui.document.result?.checks?.document_decisions : null);
   const refresh = button('Review saved article decisions', () => busy(refresh, refreshDocumentDecisions, 'Loading…'), 'small');
@@ -786,7 +811,7 @@ function documentDecisionPanel(current, checking) {
       helper(item.applicability_reason || ''), el('blockquote', {class: 'provenance-text'}, item.finding?.draft_quote || ''), el('p', {}, item.reason || ''),
       details('Review scope and history', el('div', {}, helper(`Article: ${item.title}. Original source: ${item.source_hash}.`), contextPills(item.context),
         el('p', {}, el('strong', {}, 'Original wording: '), item.finding?.source_quote || ''), el('p', {}, item.finding?.message || ''),
-        helper('Matches the exact paired quotations and preference references inside the unchanged paragraph. Different quote boundaries or nearby edits stay visible for review.'),
+        helper(item.finding?.classification === 'reviewed_rephrase' ? `Accepted reviewed difference · ${item.finding.dimension}. Matches the exact edit, semantic dimension and unchanged review context. Native meaning judgments remain visible; this approval is excluded from classification prompts.` : 'Matches the exact paired quotations and preference references inside the unchanged paragraph. Different quote boundaries or nearby edits stay visible for review.'),
         el('ul', {}, (item.history || []).map(event => el('li', {}, `${event.action} · ${event.created_at}`))))));
     if (item.status === 'active') {
       const undo = button('Undo keep decision', () => busy(undo, async () => {
@@ -876,7 +901,7 @@ function documentReviewContents() {
       const check = checks[key];
       const issues = Array.isArray(check?.issues) ? check.issues : [];
       const column = el('section', {class: 'document-check-column'}, el('h4', {}, title), helper(!current ? 'Earlier version · not current' : check?.status === 'not_checked' || !check ? 'Not checked' : check.status === 'checked' ? 'Review completed' : 'Review required'));
-      if (!issues.length) column.append(helper(check?.status === 'not_checked' || !check ? 'No substantive check was performed.' : key === 'voice' ? 'No preference violations were reported. This is not proof of personal fit.' : 'No potential issues were reported. This does not establish correctness.'));
+      if (!issues.length) column.append(helper(check?.status === 'not_checked' || !check ? 'No substantive check was performed.' : key === 'voice' ? 'No preference violations were reported. This is not proof of personal fit.' : check.accepted_issues?.length ? 'No open content findings. Your accepted differences are shown below; correctness is not established.' : 'No potential issues were reported. This does not establish correctness.'));
       else column.append(el('ul', {class: 'document-issues'}, issues.map(issue => el('li', {},
         el('strong', {}, `${issue?.label || (key === 'voice' ? 'Unclassified earlier finding' : issue?.severity || 'Review')}${issue?.change_id ? ` · ${issue.change_id}` : ''}${issue?.section ? ` · ${issue.section}` : ''}`),
         el('p', {}, issue?.message || 'Review this passage.'),
@@ -884,10 +909,16 @@ function documentReviewContents() {
         key === 'voice' && !issue?.classification && helper('Rerun checks to assess this earlier finding against the current preference criteria.'),
         key === 'voice' && issue?.classification && documentVoiceEvidence(issue),
         Array.isArray(issue?.evidence) && issue.evidence.length ? details(`Supporting checks (${issue.evidence.length})`,
-          el('ul', {}, issue.evidence.map(signal => el('li', {}, `${signal?.origin || 'review'} · ${signal?.code || 'finding'}: ${signal?.message || 'Review this signal.'}`)))) : issue?.code && el('span', {class: 'helper'}, issue.code)))));
+          el('ul', {}, issue.evidence.map(signal => el('li', {}, `${signal?.origin || 'review'} · ${signal?.code || 'finding'}: ${signal?.message || 'Review this signal.'}`)))) : issue?.code && el('span', {class: 'helper'}, issue.code),
+        key === 'content' && keepReviewedDifference(issue, checks, current, checking)))));
       columns.append(column);
     }
     content.append(columns);
+    if (checks.content?.accepted_issues?.length) content.append(el('section', {class: 'document-kept-wording'},
+      el('h4', {}, `Reviewed differences you chose to keep (${checks.content.accepted_issues.length})${!current ? ' · earlier version' : ''}`),
+      helper('The native assessments remain meaning changes. Your article-specific acceptance resolves these exact findings without approving other edits.'),
+      el('ul', {}, checks.content.accepted_issues.map(item => el('li', {}, el('p', {}, item.message),
+        el('p', {}, el('strong', {}, 'Your reason: '), item.decision_reason), helper(`Decision ${item.decision_id} · ${item.change_id} · ${item.dimension}`))))));
     const coverage = Array.isArray(checks.coverage_notices) ? checks.coverage_notices : [];
     if (coverage.length) content.append(el('section', {class: 'document-coverage-notices'},
       el('h4', {}, `Evidence coverage${!current ? ' · earlier version' : ''}`),
@@ -908,7 +939,7 @@ function documentReviewContents() {
       notes.append(helper(`${assessed} of ${wording.checks.length} planned edit candidates assessed · ${wording.checks.length - assessed} not assessed`));
       for (const item of wording.checks) {
         if (!item || typeof item !== 'object') continue;
-        const label = !item.reviewed ? 'Not assessed' : item.verdict === 'preserved' ? 'Meaning appears preserved' : item.verdict === 'changed' ? `${item.label || 'Meaning changed'} · review` : 'Uncertain · review';
+        const label = item.accepted_decision_id ? 'Reviewed difference · kept for this article' : !item.reviewed ? 'Not assessed' : item.verdict === 'preserved' ? 'Meaning appears preserved' : item.verdict === 'changed' ? `${item.label || 'Meaning changed'} · review` : 'Uncertain · review';
         notes.append(el('section', {class: 'document-check-column'}, el('h4', {}, label),
           helper(`${item.change_id || 'Edit'}${item.section ? ` · ${item.section}` : ''}${item.assessment_scope === 'combined' ? ' · related changes assessed together' : ''}${!current ? ' · earlier version' : ''}`),
           el('p', {}, el('strong', {}, 'Before: '), item.source_quote || '(Insertion)'),

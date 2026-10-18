@@ -10,6 +10,18 @@ class DocumentDecisionRoutes:
     def route(self, handler, path, body, controls_validator):
         if handler.command != 'POST' or not path.startswith('/api/document-decisions'):
             return False
+        if path in ('/api/document-decisions/reviewed', '/api/document-decisions/reviewed/preview'):
+            previewing = path.endswith('/preview')
+            handler._fields(body, {'source', 'text', 'context', 'controls', 'finding', 'assessment'} | (set() if previewing else {'reason'}))
+            source = validate_document_text(body.get('source'))
+            draft = validate_document_text(body.get('text'), output=True)
+            context = validate_context(body.get('context'))
+            controls = controls_validator(body.get('controls'), document=True)
+            if previewing:
+                from .reviewed_decisions import preview
+                return handler._json({'preview': preview(source, draft, body.get('finding'), body.get('assessment'))}) or True
+            decision = self.store.keep_reviewed(source, draft, context, controls, body.get('finding'), body.get('assessment'), body.get('reason'))
+            return handler._json({'decision': decision, 'decisions': self.store.resolve(source, draft, context, controls)}) or True
         if path in ('/api/document-decisions', '/api/document-decisions/resolve'):
             keeping = path == '/api/document-decisions'
             handler._fields(body, {'source', 'text', 'context', 'controls'} | ({'suggestion', 'reason'} if keeping else set()))
