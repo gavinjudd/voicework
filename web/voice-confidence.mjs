@@ -15,7 +15,7 @@ export function confidenceView(value) {
     note: text(value.note),
     next_step: text(value.next_step),
     milestones: Array.isArray(value.milestones) ? value.milestones.slice(0, 3).map(item => ({label: text(item?.label), detail: text(item?.detail), complete: item?.complete === true})) : [],
-    evidence: {authored_samples: count(evidence.authored_samples), feedback: count(evidence.feedback), lessons: count(evidence.lessons), channels: channels(evidence.channels)},
+    evidence: {authored_samples: count(evidence.authored_samples), feedback: count(evidence.feedback), lessons: count(evidence.lessons), learned_preferences: count(evidence.learned_preferences), channels: channels(evidence.channels)},
     validation: {
       ...Object.fromEntries(['rated_real', 'calibrated_wins', 'baseline_wins', 'ties', 'neither', 'factual_flags', 'distinct_briefs', 'correction_checks'].map(key => [key, count(validation[key])])),
       channels: channels(validation.channels),

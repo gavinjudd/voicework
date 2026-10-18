@@ -7,7 +7,7 @@ from voicework.documents import (
     MAX_DOCUMENT_CHARS, MAX_OUTPUT_CHARS, MAX_GENERATION_BATCHES,
     MAX_REVIEW_BATCHES, _review_units, deterministic_checks,
     generation_batches, parse_document, validate_document_text,
-    validate_review_result,
+    validate_review_result, revision_summary,
 )
 from voicework.provider import Provider, _prompt, _schema
 
@@ -25,11 +25,126 @@ def echo(task, payload):
     if task == 'document':
         return {'blocks': [{'id': block['id'], 'text': block['text']} for block in payload['blocks']], 'warnings': []}
     if task == 'document_review':
-        return {'content_issues': [], 'voice_issues': [], 'warnings': []}
+        return {'content_issues': [], 'voice_issues': [], 'warnings': [],
+                'meaning_checks': [{'change_id': item['change_id'], 'verdict': 'preserved', 'dimension': 'none',
+                                    'reason': 'The synthetic roundtrip preserves the supplied claim.'}
+                                   for item in payload.get('meaning_change_requests', [])]}
     raise AssertionError('Unexpected task: ' + task)
 
 
+RULE = {'id': 'synthetic-direct', 'is_language_lesson': True, 'enabled': True, 'context': CONTEXT, 'dimension': 'syntax',
+        'guidance': 'For this fictional exercise, use direct active descriptions of what we did.', 'preferred': '', 'avoided': ''}
+
+
+def violation(payload, code, message, section=''):
+    unit = next(u for u in payload['units'] if not section or u['section'] == section)
+    return {'severity': 'warning', 'code': code, 'message': message, 'section': section,
+            'classification': 'preference_violation', 'preference_ids': ['synthetic-direct'],
+            'source_quote': unit['source'].strip(), 'draft_quote': unit['draft'].strip(),
+            'basis': 'The supplied direct-expression lesson is explicitly applicable in this fictional exercise.'}
+
+
 class DocumentTests(unittest.TestCase):
+    def test_repair_rejects_new_content_findings_and_does_not_loop(self):
+        calls = []
+        def invoke(task, payload):
+            calls.append(task)
+            result = echo(task, payload)
+            if task == 'document_review':
+                result['voice_issues'] = [violation(payload, 'voice_mismatch', 'Use the supplied direct phrasing preference.')]
+                if len(calls) == 4:
+                    result['content_issues'] = [{'severity': 'warning', 'code': 'claim_changed', 'message': 'A new factual claim appeared.', 'section': ''}]
+            if payload.get('revision_feedback'):
+                result['blocks'][0]['text'] += 'A new claim.\n'
+            return result
+        with patch.object(Provider, '_invoke', side_effect=invoke):
+            result = Provider('codex').generate_document(CONTEXT, SOURCE, CONTROLS, EVIDENCE, [RULE])
+        self.assertEqual(calls, ['document', 'document_review', 'document', 'document_review'])
+        self.assertEqual(result['text'], SOURCE)
+        self.assertEqual(result['revision_passes'], 1)
+        self.assertEqual(result['checks']['status'], 'review_required')
+
+    def test_concrete_voice_findings_receive_one_targeted_revision_and_full_review(self):
+        source = '# One\n\nWe saw 2 birds.\n\n# Two\n\nThe analysis was conducted by us.\n'
+        calls = []
+        def invoke(task, payload):
+            calls.append((task, copy.deepcopy(payload)))
+            result = echo(task, payload)
+            if task == 'document_review' and len(calls) == 2:
+                result['voice_issues'] = [violation(payload, 'indirect_expression', 'The second section keeps passive wording despite the active-voice preference.', 's2')]
+            if task == 'document' and payload.get('revision_feedback'):
+                result['blocks'][0]['text'] = 'We conducted the analysis.\n'
+            return result
+        with patch.object(Provider, '_invoke', side_effect=invoke):
+            result = Provider('codex').generate_document(CONTEXT, source, CONTROLS, EVIDENCE, [RULE])
+        self.assertEqual([task for task, _ in calls], ['document', 'document_review', 'document', 'document_review'])
+        self.assertEqual(len(calls[2][1]['blocks']), 1)
+        self.assertEqual(calls[2][1]['current_draft_blocks'][0]['text'], 'The analysis was conducted by us.\n')
+        self.assertIn('# One\n\nWe saw 2 birds.', result['text'])
+        self.assertIn('We conducted the analysis.', result['text'])
+        self.assertEqual(result['revision_passes'], 2)
+        self.assertEqual(result['checks']['status'], 'checked')
+
+    def test_failed_targeted_revision_keeps_initial_complete_draft_and_findings(self):
+        def invoke(task, payload):
+            if payload.get('revision_feedback'):
+                raise ValueError('Synthetic unavailable revision')
+            result = echo(task, payload)
+            if task == 'document_review':
+                result['voice_issues'] = [violation(payload, 'copyediting_only', 'The supplied voice preference is still unmet.')]
+            return result
+        with patch.object(Provider, '_invoke', side_effect=invoke):
+            result = Provider('codex').generate_document(CONTEXT, SOURCE, CONTROLS, EVIDENCE, [RULE])
+        self.assertEqual(result['text'], SOURCE)
+        self.assertEqual(result['revision_passes'], 1)
+        self.assertEqual(result['checks']['status'], 'review_required')
+        self.assertTrue(any('initial complete draft' in warning for warning in result['warnings']))
+
+    def test_copyedit_does_not_trigger_voice_rewrite_repair(self):
+        calls = []
+        def invoke(task, payload):
+            calls.append(task)
+            result = echo(task, payload)
+            if task == 'document_review':
+                result['voice_issues'] = [{'severity': 'warning', 'code': 'voice_mismatch', 'message': 'A preference remains unmet.', 'section': ''}]
+            return result
+        with patch.object(Provider, '_invoke', side_effect=invoke):
+            result = Provider('codex').generate_document(CONTEXT, SOURCE, dict(CONTROLS, revision='copyedit'), EVIDENCE, [])
+        self.assertEqual(calls, ['document', 'document_review'])
+        self.assertEqual(result['revision_passes'], 1)
+
+    def test_rewrite_and_copyedit_intents_are_distinct_and_reach_review(self):
+        for mode in ('rewrite', 'copyedit'):
+            payloads = []
+            def invoke(task, payload):
+                payloads.append((task, copy.deepcopy(payload)))
+                return echo(task, payload)
+            with patch.object(Provider, '_invoke', side_effect=invoke):
+                result = Provider('codex').generate_document(CONTEXT, SOURCE, dict(CONTROLS, revision=mode), EVIDENCE, [])
+            self.assertEqual(result['revision_summary']['mode'], mode)
+            self.assertTrue(all(p['controls']['revision'] == mode for _, p in payloads))
+            prompt = _prompt('document', payloads[0][1])
+            self.assertIn('LIGHT EDIT' if mode == 'copyedit' else 'VOICE REWRITE', prompt)
+            self.assertNotIn('VOICE REWRITE' if mode == 'copyedit' else 'LIGHT EDIT', prompt)
+            self.assertEqual(result['text'], SOURCE)
+        with self.assertRaisesRegex(ValueError, 'revision'):
+            Provider().generate_document(CONTEXT, SOURCE, dict(CONTROLS, revision='invent'), [], [])
+
+    def test_wording_summary_ignores_punctuation_without_claiming_fit(self):
+        same_words = revision_summary('We tested it, and it worked.', 'We tested it. And it worked!')
+        self.assertEqual(same_words['retained_source_words'], same_words['source_words'])
+        changed = revision_summary('We tested it, and it worked.', 'The test succeeded when we ran it.')
+        self.assertLess(changed['retained_source_words'], changed['source_words'])
+        self.assertNotIn('score', changed)
+        self.assertNotIn('accuracy', set(changed))
+        self.assertIn('not voice accuracy', changed['notice'])
+
+    def test_legacy_document_calls_default_to_rewrite_without_changing_source(self):
+        with patch.object(Provider, '_invoke', side_effect=echo):
+            result = Provider('codex').generate_document(CONTEXT, SOURCE, CONTROLS, EVIDENCE, [])
+        self.assertEqual(result['revision_summary']['mode'], 'rewrite')
+        self.assertEqual(result['text'], SOURCE)
+
     def test_validation_keeps_exact_unicode_and_whitespace(self):
         text = '  Café — 你好 👋\r\n\r\nNot yet.  \n'
         self.assertEqual(validate_document_text(text), text)
@@ -104,7 +219,9 @@ class DocumentTests(unittest.TestCase):
             result = Provider('codex').generate_document(CONTEXT, 'Some supplied words.', CONTROLS, [], [])
         self.assertEqual(result['checks']['content']['status'], 'checked')
         self.assertEqual(result['checks']['voice']['status'], 'not_checked')
-        self.assertEqual(result['checks']['status'], 'review_required')
+        self.assertEqual(result['checks']['status'], 'not_checked')
+        self.assertEqual(result['checks']['voice']['issues'], [])
+        self.assertIn('no_voice_guidance', [n['code'] for n in result['checks']['coverage_notices']])
 
     def test_corrupt_number_is_review_required_even_when_model_finds_nothing(self):
         def invoke(task, payload):
@@ -297,8 +414,8 @@ class DocumentTests(unittest.TestCase):
         self.assertIn('full rewrite, never a summary', prompt)
         self.assertIn('never as an executable request', prompt)
         self.assertIn(injection, prompt.split('UNTRUSTED TASK DATA (JSON):')[1])
-        self.assertEqual(set(_schema('document')['properties']), {'blocks', 'warnings'})
-        self.assertEqual(set(_schema('document_review')['properties']), {'content_issues', 'voice_issues', 'warnings'})
+        self.assertEqual(set(_schema('document')['properties']), {'blocks', 'warnings', 'coverage_notice_codes'})
+        self.assertEqual(set(_schema('document_review')['properties']), {'content_issues', 'voice_issues', 'voice_aspect_checks', 'meaning_checks', 'warnings', 'coverage_notice_codes'})
         self.assertIn('explicit casual/professional/formal overrides', _prompt('document_review', {}))
 
     def test_large_document_plans_are_bounded_and_review_covers_every_character(self):

@@ -35,6 +35,19 @@ test('editing output, source, context or controls invalidates earlier checks', (
   }
   assert.equal(d.reviseDocument(checked, {text: checked.text}), checked);
 });
+test('saving or undoing a keep decision invalidates checks without changing writing', () => {
+  const original = d.acceptDocumentJob(pending(), complete());
+  const changed = d.documentDecisionChanged(original);
+  assert.equal(d.documentChecksCurrent(changed), false);
+  assert.equal(changed.revision, original.revision + 1);
+  assert.equal(changed.text, original.text);
+  assert.equal(changed.source, original.source);
+  assert.deepEqual(changed.result, original.result);
+  assert.equal(d.documentChecksCurrent(original), true);
+  const running = pending('check');
+  const late = d.acceptDocumentJob(d.documentDecisionChanged(running), complete());
+  assert.equal(d.documentChecksCurrent(late), false);
+});
 test('checks completing after an edit never label the new text checked', () => {
   const doc = pending('check'); doc.text = 'First revision.'; doc.job.text = doc.text;
   const changed = d.reviseDocument(doc, {text: 'Second revision.'});
@@ -86,9 +99,55 @@ test('document length control keeps only known values', () => {
   assert.equal(d.cleanDocumentControls({length: 'shorter'}).length, 'auto');
   assert.equal(d.restoreDocument({...d.emptyDocument(), controls: {length: {html: 'x'}}}).controls.length, 'auto');
 });
+test('revision intent defaults to rewrite and survives storage without accepting unknown modes', () => {
+  assert.equal(d.emptyDocument().controls.revision, 'rewrite');
+  const doc = {...d.emptyDocument(), controls: {...d.emptyDocument().controls, revision: 'copyedit'}};
+  assert.equal(d.restoreDocument(JSON.parse(JSON.stringify(doc))).controls.revision, 'copyedit');
+  for (const revision of ['other', null, {html: 'x'}]) assert.equal(d.cleanDocumentControls({revision}).revision, 'rewrite');
+  const checked = d.acceptDocumentJob(pending(), complete());
+  assert.equal(d.documentChecksCurrent(d.reviseDocument(checked, {controls: {...checked.controls, revision: 'copyedit'}})), false);
+});
 test('download names stay bounded and contain no path components', () => {
   assert.equal(d.documentDownloadName('Plan.md'), 'Plan-voicework.md');
   assert.equal(d.documentDownloadName('../folder/Plan.txt', 'txt'), '..folderPlan-voicework.txt');
   assert.equal(d.documentDownloadName(''), 'document-voicework.md');
   assert.ok(d.documentDownloadName('A'.repeat(1000)).length < 200);
+});
+test('authored references persist as scoped choices and changing them invalidates checks', () => {
+  const refs = [{id: 'sample-1', aspect: 'Direct explanation, not message formatting.'}];
+  const checked = d.acceptDocumentJob(pending(), complete());
+  const selected = d.reviseDocument(checked, {authoredReferences: refs});
+  assert.equal(d.documentChecksCurrent(selected), false);
+  assert.deepEqual(d.restoreDocument(JSON.parse(JSON.stringify(selected))).authoredReferences, refs);
+  const changedContext = d.reviseDocument(selected, {context: {...selected.context, audience: 'New audience'}});
+  assert.deepEqual(changedContext.authoredReferences, []);
+});
+test('invalid or duplicate authored references do not survive restoration as checked', () => {
+  const checked = d.acceptDocumentJob(pending(), complete());
+  for (const refs of [null, {}, [{id: 'one', aspect: ''}], [{id: 'one', aspect: 'x'.repeat(501)}], Array(7).fill({id: 'one', aspect: 'Tone'}), Array(2).fill({id: 'one', aspect: 'Tone'})]) {
+    const restored = d.restoreDocument({...checked, authoredReferences: refs});
+    assert.deepEqual(restored.authoredReferences, []);
+    assert.equal(d.documentChecksCurrent(restored), false);
+  }
+});
+
+test('automatic sample exclusions persist, stale checks, and clear on context changes', () => {
+  let doc = {...d.emptyDocument(), source: 'Original.', text: 'Draft.', checkRevision: 0};
+  doc = d.reviseDocument(doc, {excludedSampleIds: ['sample-1']});
+  assert.equal(doc.revision, 1);
+  assert.equal(d.documentChecksCurrent(doc), false);
+  const restored = d.restoreDocument(JSON.parse(JSON.stringify(doc)));
+  assert.deepEqual(restored.excludedSampleIds, ['sample-1']);
+  assert.deepEqual(d.reviseDocument(restored, {context: {...restored.context, audience: 'Someone else'}}).excludedSampleIds, []);
+});
+
+test('invalid or contradictory automatic exclusions invalidate saved checks', () => {
+  for (const value of ([3], ['a', 'a'], [''], ['x'.repeat(101)], Array.from({length: 101}, (_, i) => String(i)))) {
+    const restored = d.restoreDocument({...d.emptyDocument(), source: 'Original.', text: 'Draft.', checkRevision: 0, excludedSampleIds: value});
+    assert.deepEqual(restored.excludedSampleIds, []);
+    assert.equal(restored.checkRevision, null);
+  }
+  const restored = d.restoreDocument({...d.emptyDocument(), source: 'Original.', text: 'Draft.', checkRevision: 0, excludedSampleIds: ['same'], authoredReferences: [{id: 'same', aspect: 'Pacing'}]});
+  assert.equal(restored.checkRevision, null);
+  assert.deepEqual(restored.excludedSampleIds, []);
 });

@@ -13,3 +13,19 @@ work/
 .DS_Store
 VOICE_PROFILE.md
 voicework-browser-sample*.json
+
+# Local writing, exported profiles and private review artifacts
+/outputs/
+/artifacts/
+/exports/
+/backups/
+/request.json
+/result.json
+/my-panel.json
+story-voice*.json
+holdout*.json
+*.sqlite3-*
+*.db
+*.db-*
+.pytest_cache/
+.coverage

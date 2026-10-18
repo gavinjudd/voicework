@@ -1,0 +1,15 @@
+.preference-learner .preference-form{display:grid;gap:16px;margin-top:18px}
+.preference-learner .preference-trait{padding:20px 0;border-bottom:1px solid var(--line,#d9e0e4)}
+.preference-learner .preference-trait:last-child{border-bottom:0}
+.preference-learner .preference-trait h3{margin:0;font-size:16px}
+.preference-learner .preference-trait>p{overflow-wrap:anywhere}
+.preference-learner .preference-metrics{display:flex;flex-wrap:wrap;gap:8px 20px;margin:12px 0;font-size:13px;font-weight:600}
+.preference-learner .preference-evidence{padding:16px;margin:14px 0;background:var(--paper,#f5f4ef);border:1px solid var(--line,#d9e0e4);border-radius:8px}
+.preference-learner .preference-evidence p{overflow-wrap:anywhere}
+.preference-learner .preference-form input[type=range]{width:100%;accent-color:var(--green,#286b58)}
+.preference-learner label:has(>input[type=checkbox]){display:flex;align-items:center;flex-direction:row-reverse;justify-content:flex-end;gap:10px}
+.preference-learner input[type=checkbox]{width:16px;height:16px;flex:none;accent-color:var(--green,#286b58)}
+.preference-learner select,.preference-learner textarea,.preference-learner input[type=text],.preference-learner input[type=url]{width:100%;max-width:100%}
+.preference-learner output{font-size:13px;color:var(--muted,#707872)}
+.preference-learner .provenance-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto}
+@media(max-width:700px){.preference-learner .review-top{flex-wrap:wrap}.preference-learner .preference-metrics{gap:8px 12px}.preference-learner .preference-evidence{padding:12px}}

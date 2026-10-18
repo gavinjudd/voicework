@@ -28,6 +28,13 @@ from .document_jobs import DocumentJobs
 from .documents import MAX_DOCUMENT_CHARS, MAX_OUTPUT_CHARS, validate_document_text
 from .routing import resolve_context
 from .live import LIVE_PROVIDERS
+from .preference_learner import PreferenceLearner, NOTICE as PREFERENCE_NOTICE
+from .preference_api import PreferenceRoutes
+from .identity import IdentityStore
+from .identity_api import IdentityRoutes
+from .document_decisions import DocumentDecisionStore, acknowledge, scope_decisions
+from .document_decision_api import DocumentDecisionRoutes, DocumentWordingRoutes
+from .document_wording import DocumentWordingStore
 
 MAX_BODY_BYTES = 8 * 1024 * 1024
 
@@ -54,7 +61,7 @@ def _unique_object(pairs):
 def validate_controls(value, document=False):
     if value is None:
         value = {}
-    allowed = {"polish", "detail", "warmth", "assertiveness", "structure", "register"} | ({"length"} if document else set())
+    allowed = {"polish", "detail", "warmth", "assertiveness", "structure", "register"} | ({"length", "revision"} if document else set())
     if not isinstance(value, dict) or set(value) - allowed:
         raise ValueError("Unknown draft control")
     controls = {}
@@ -72,6 +79,10 @@ def validate_controls(value, document=False):
         raise ValueError("register must be auto, casual, professional, or formal")
     controls["register"] = register
     if document:
+        revision = value.get("revision", "rewrite")
+        if not isinstance(revision, str) or revision not in {"rewrite", "copyedit"}:
+            raise ValueError("revision must be rewrite or copyedit")
+        controls["revision"] = revision
         length = value.get("length", "auto")
         if length not in ("auto", "preserve"):
             raise ValueError("length must be auto or preserve")
@@ -92,12 +103,18 @@ class VoiceworkServer(ThreadingHTTPServer):
         self.quality_checks = QualityStore(store.path)
         self.evaluations = EvaluationStore(store.path)
         self.proposals = ProposalStore(store.path)
+        self.preference_learner = PreferenceLearner(store.path)
+        self.preference_routes = PreferenceRoutes(self.preference_learner)
         self.discovery_jobs = DiscoveryJobs(store)
         self.web_root = Path(web_root).resolve()
         self.token = secrets.token_urlsafe(32)
         self._slots = threading.BoundedSemaphore(16)
         self.generation_slots = threading.BoundedSemaphore(2)
         self.document_jobs = DocumentJobs(self.generation_slots)
+        self.identity_jobs = DocumentJobs(self.generation_slots, failure_messages=('Identity inference could not be completed or its source evidence could not be validated. Your profile is unchanged. Inspect the supplied context and provider before retrying.', 'The identity learning job failed. Your saved context and profile are unchanged.'))
+        self.identities = IdentityStore(store.path)
+        self.document_decisions = DocumentDecisionStore(store.path)
+        self.document_wording = DocumentWordingStore(store.path)
         self.discovery_slot = threading.BoundedSemaphore(1)
         super().__init__(address, Handler)
 
@@ -257,21 +274,34 @@ class Handler(BaseHTTPRequestHandler):
     def _language_preferences(self, context):
         return [{**item, "is_language_lesson": True} for item in self.server.language_lessons.matching(context)]
 
-    def _writing_inputs(self, context):
+    def _writing_inputs(self, context, exclude_preference_sources=(), authored_references=(), excluded_sample_ids=()):
         return writing_inputs(self.server.store.samples(), self.server.store.feedback(), self.server.language_lessons.list(),
-                              self.server.priors.list(confirmed_only=True), context)
+                              self.server.priors.list(confirmed_only=True), context, self.server.preference_learner,
+                              exclude_preference_sources, identity=self.server.identities, authored_references=authored_references, excluded_sample_ids=excluded_sample_ids)
 
     def _route(self, path, query, body):
         store, provider = self.server.store, self.server.provider
         method = "GET" if self.command == "HEAD" else self.command
+        if IdentityRoutes(self.server.identities).route(self, path, query, body):
+            return
+        if self.server.preference_routes.route(self, path, query, body):
+            return
+        if DocumentDecisionRoutes(self.server.document_decisions).route(self, path, body, validate_controls):
+            return
+        if DocumentWordingRoutes(self.server.document_wording).route(self, path, body, validate_controls):
+            return
         if method == "GET" and path == "/api/health":
             return self._json({"ok": True})
         if method == "GET" and path == "/api/session":
-            return self._json({"token": self.server.token, "provider": provider.mode,
+            return self._json({"profile_instance": hashlib.sha256(str(store.path.resolve()).encode()).hexdigest(), "token": self.server.token, "provider": provider.mode,
                                "limits": {"document_chars": MAX_DOCUMENT_CHARS, "output_chars": MAX_OUTPUT_CHARS}})
         if method == "POST" and path == "/api/context/resolve":
-            self._fields(body, {"context"})
-            return self._json(self._writing_inputs(validate_context(body.get("context")))[3])
+            self._fields(body, {"context", "authored_references", "excluded_sample_ids"})
+            from .sample_selection import reference_allowed
+            report = self._writing_inputs(validate_context(body.get("context")), authored_references=body.get('authored_references', []), excluded_sample_ids=body.get('excluded_sample_ids', []))[3]
+            report['reference_candidates'] = [{'id': s['id'], 'title': s.get('title', 'Untitled sample'),
+                                               'context': s.get('context', {})} for s in store.samples() if reference_allowed(s, report['context'])]
+            return self._json(report)
         if method == "GET" and path.startswith("/api/documents/"):
             ident = path[len("/api/documents/"):]
             if len(ident) != 36 or "/" in ident:
@@ -279,29 +309,43 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.server.document_jobs.get(ident))
         if method == "POST" and path in {"/api/documents", "/api/document-checks"}:
             checking = path == "/api/document-checks"
-            self._fields(body, {"context", "source", "controls", "text"} if checking else {"context", "source", "controls"})
+            self._fields(body, {"context", "source", "controls", "authored_references", "excluded_sample_ids", "text"} if checking else {"context", "source", "controls", "authored_references", "excluded_sample_ids"})
             source = validate_document_text(body.get("source"))
             draft = validate_document_text(body.get("text"), output=True) if checking else None
             controls = validate_controls(body.get("controls"), document=True)
-            context, evidence, preferences, report = self._writing_inputs(validate_context(body.get("context")))
+            context, evidence, preferences, report = self._writing_inputs(validate_context(body.get("context")), authored_references=body.get('authored_references', []), excluded_sample_ids=body.get('excluded_sample_ids', []))
             # Context choices are useful in the explicit local preview, but
             # unrelated lesson metadata does not belong in a portable result.
             report.pop("candidates", None)
+            report.pop("reference_candidates", None)
             # Freeze all inputs before background work, including profile changes
             # made while the document is being generated or checked.
             frozen = copy.deepcopy({"context": context, "evidence": evidence, "preferences": preferences, "controls": controls})
             report["profile_fingerprint"] = hashlib.sha256(json.dumps(frozen, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+            # Explicit article instructions are frozen separately from learned
+            # voice. Initial/repair generation and local compliance see them;
+            # independent meaning assessment and general learning do not.
+            decisions = self.server.document_decisions.resolve(source, draft or source, context, controls)
+            wording = self.server.document_wording.resolve(source, context, controls)
 
             def operation():
                 args = (frozen["context"], source)
                 tail = (frozen["controls"], frozen["evidence"], frozen["preferences"])
+                review_options = {'document_decisions': decisions} if decisions['items'] else {}
+                if wording['items']:
+                    review_options['document_wording'] = wording
                 if checking:
-                    result = {"checks": provider.check_document(*args, draft, *tail), "provider": provider.mode}
+                    result = {"checks": provider.check_document(*args, draft, *tail, **review_options), "provider": provider.mode}
+                    result['checks'] = acknowledge(result['checks'], decisions)
                 else:
-                    result = provider.generate_document(*args, *tail)
+                    result = provider.generate_document(*args, *tail, **review_options)
                     if not isinstance(result, dict):
                         raise ValueError("Invalid document result")
                     validate_document_text(result.get("text"), output=True)
+                    if result.get('checks'):
+                        result['checks'] = acknowledge(result['checks'], scope_decisions(decisions['items'], source, result['text'], context, controls))
+                if result.get('checks'):
+                    result['checks']['document_wording'] = copy.deepcopy(wording)
                 result["evidence_ids"] = [item["id"] for item in frozen["evidence"]]
                 result["context_report"] = report
                 return result
@@ -318,9 +362,11 @@ class Handler(BaseHTTPRequestHandler):
             quality_checks = self.server.quality_checks.list_cases()
             return self._json({"samples": samples, "rounds": rounds, "feedback": feedback,
                 "profile": build_profile(samples, feedback, lessons), "language_lessons": lessons,
-                "voice_confidence": build_voice_confidence(samples, feedback, lessons, evaluations, quality_checks),
+                "voice_confidence": build_voice_confidence(samples, feedback, lessons, evaluations, quality_checks, self.server.preference_learner.export_preferences()),
                 "corrections": self.server.corrections.list(), "quality_checks": quality_checks,
-                "story_engine_sources": available_sources(samples, feedback, lessons),
+                "identity_profiles": self.server.identities.list(),
+                "preference_traits": self.server.preference_learner.list_traits(), "preference_notice": PREFERENCE_NOTICE,
+                "story_engine_sources": available_sources(samples, feedback, lessons, self.server.preference_learner.export_preferences()),
                 "lesson_proposals": self.server.proposals.list("pending"),
                 "quality_summary": self.server.quality_checks.summary(),
                 "priors": self.server.priors.list(), "evaluations": evaluations,
@@ -334,6 +380,21 @@ class Handler(BaseHTTPRequestHandler):
                                  "browser_import": True, **scan_capabilities()}, "token": self.server.token})
         if method == "GET" and path == "/api/export":
             markdown = export_markdown(store.samples(), store.feedback(), query.get("examples") == ["1"], self.server.language_lessons.list())
+            learned = self.server.preference_learner.export_preferences()
+            if learned:
+                markdown += "\n## Learned preferences (supporting, context-specific evidence)\n\n" + PREFERENCE_NOTICE + "\n"
+                for item in learned:
+                    packet = {key: item[key] for key in ("label", "context", "guidance", "estimate")}
+                    markdown += "\n" + "\n".join("> " + line.replace("<", "&lt;").replace(">", "&gt;") for line in json.dumps(packet, ensure_ascii=False, indent=2).splitlines()) + "\n"
+            profiles = [p for p in self.server.identities.list() if p['active']]
+            if profiles:
+                markdown += "\n## Reviewed identity and communication goals\nThese guide expression and emphasis, never factual claims. Raw intake sources are omitted.\n"
+                for profile in profiles:
+                    # Resolver rechecks source eligibility in the profile's own declared scope.
+                    resolved = self.server.identities.resolve(profile['context'])['profiles']
+                    for item in resolved:
+                        if item['id'] == profile['id']:
+                            markdown += "\n> " + json.dumps({k:item[k] for k in ('label','context','values','revision')}, ensure_ascii=False).replace('\n','\n> ') + "\n"
             priors = self.server.priors.list(confirmed_only=True)
             if priors:
                 markdown += "\n## Reviewed prior context (not authored samples)\n"
@@ -350,7 +411,8 @@ class Handler(BaseHTTPRequestHandler):
             voice = build_story_voice(store.samples(), store.feedback(), self.server.language_lessons.list(),
                                       query.get("target", [""])[0], query.get("channel", []), query.get("examples") == ["1"],
                                       priors=self.server.priors.list(confirmed_only=True) if include_facts else (),
-                                      include_facts=include_facts, topic=query.get("topic", [""])[0])
+                                      include_facts=include_facts, topic=query.get("topic", [""])[0],
+                                      preferences=self.server.preference_learner.export_preferences())
             return self._json({"story_voice": voice, "filename": "story-voice.json"})
         if method == "GET" and path == "/api/corrections":
             return self._json({"corrections": self.server.corrections.list()})
@@ -365,7 +427,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.server.corrections.undo(parts[3]))
             self._fields(body, {"context", "brief"})
             correction, target_lesson, context, brief = self.server.corrections.prepare_check(parts[3], body.get("context"), body.get("brief", ""))
-            context, evidence, preferences, report = self._writing_inputs(context)
+            context, evidence, preferences, report = self._writing_inputs(context, (correction["id"],))
             if not self.server.generation_slots.acquire(blocking=False):
                 raise HTTPError(429, "Generation is busy; try again shortly")
             try:
@@ -449,8 +511,7 @@ class Handler(BaseHTTPRequestHandler):
             self._fields(body, {"context", "brief"})
             context = validate_context(body.get("context"))
             brief = text_field(body.get("brief", ""), "brief", 15000, True)
-            evidence = retrieve(store.samples(), context)
-            preferences = contextual_preferences(store.feedback(), context) + self._prior_preferences(context) + self._language_preferences(context)
+            context, evidence, preferences, _ = self._writing_inputs(context)
             if not self.server.generation_slots.acquire(blocking=False):
                 raise HTTPError(429, "Generation is busy; try again shortly")
             try:
@@ -520,7 +581,7 @@ class Handler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/feedback":
             feedback = store.add_feedback(body)
             return self._json({"feedback": feedback, "profile": build_profile(store.samples(), store.feedback(), self.server.language_lessons.list())}, 201)
-        if method == "GET" and path in {"/", "/index.html", "/app.js", "/styles.css", "/correction-diff.mjs", "/voice-confidence.mjs", "/document-state.mjs"}:
+        if method == "GET" and path in {"/", "/index.html", "/app.js", "/styles.css", "/correction-diff.mjs", "/voice-confidence.mjs", "/document-state.mjs", "/preference-learner.mjs", "/preference-learner.css", "/identity-profile.mjs", "/identity-profile.css"}:
             name = "index.html" if path == "/" else path[1:]
             asset = self.server.web_root / name
             if not asset.is_file() or asset.is_symlink():

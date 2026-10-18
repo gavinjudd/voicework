@@ -43,6 +43,19 @@ class MCPUnitTests(unittest.TestCase):
     def call(self, name, arguments=None, ident=1):
         return self.mcp.handle({"jsonrpc": "2.0", "id": ident, "method": "tools/call", "params": {"name": name, "arguments": arguments or {}}})["result"]
 
+    def test_automatic_sample_reasons_export_only_with_consented_examples(self):
+        from test_automatic_samples import ARTICLE, sample
+        fixture = sample()
+        record = self.mcp.store.add_sample({k: fixture[k] for k in ('text', 'context', 'title')})
+        self.mcp.store.update_sample(record['id'], {'status': 'confirmed'})
+        text, result = self.mcp.get_voice_guidance(ARTICLE)
+        self.assertEqual(result['examples'], [])
+        self.assertNotIn(fixture['text'], text + json.dumps(result))
+        text, result = self.mcp.get_voice_guidance({**ARTICLE, 'include_examples': True})
+        self.assertEqual(result['examples'][0]['selection']['kind'], 'automatic_transfer')
+        self.assertIn('selection', text.casefold())
+        self.assertEqual(result['examples'][0]['context'], fixture['context'])
+
     def test_initialize_and_tools_list(self):
         reply = self.mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                                  "params": {"protocolVersion": "2025-03-26", "clientInfo": {"name": "claude-code"}, "capabilities": {}}})
@@ -52,7 +65,7 @@ class MCPUnitTests(unittest.TestCase):
         self.assertEqual(unknown["result"]["protocolVersion"], "2025-06-18")
         self.assertIsNone(self.mcp.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}))
         names = [tool["name"] for tool in self.mcp.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})["result"]["tools"]]
-        self.assertEqual(names, ["list_voice_contexts", "get_voice_guidance", "get_story_voice", "propose_lesson"])
+        self.assertEqual(names, ["list_preferences", "propose_preference_evidence", "list_voice_contexts", "get_voice_guidance", "get_story_voice", "propose_lesson", "get_identity_intake", "create_identity_intake", "submit_identity_context", "process_identity_context", "get_identity_learning_job"])
         self.assertEqual(self.mcp.handle({"jsonrpc": "2.0", "id": 4, "method": "nope"})["error"]["code"], -32601)
 
     def test_guidance_is_context_scoped_and_private_material_is_opt_in(self):

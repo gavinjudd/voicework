@@ -1,6 +1,8 @@
+import {renderIdentityProfiles, seedIdentitySource} from './identity-profile.mjs';
+import {renderPreferenceLearner, seedPreferenceEvidence, canTeachComparison, canTeachPractice} from './preference-learner.mjs';
 import {changedSpan, hasSimilarScope, correctionScopeSummary} from './correction-diff.mjs';
 import {confidenceView, pendingSampleCounts} from './voice-confidence.mjs';
-import {DOCUMENT_SOURCE_LIMIT, DOCUMENT_OUTPUT_LIMIT, DOCUMENT_STORAGE_LIMIT, cleanDocumentContext, emptyDocument, restoreDocument, validDocumentJob, activeDocumentJob, documentChecksCurrent, reviseDocument, acceptDocumentJob, documentDownloadName} from './document-state.mjs';
+import {DOCUMENT_SOURCE_LIMIT, DOCUMENT_OUTPUT_LIMIT, DOCUMENT_STORAGE_LIMIT, cleanDocumentContext, emptyDocument, restoreDocument, validDocumentJob, activeDocumentJob, documentChecksCurrent, reviseDocument, documentDecisionChanged, acceptDocumentJob, documentDownloadName} from './document-state.mjs';
 const app = document.querySelector('#app');
 const toastRegion = document.querySelector('#toast-region');
 const routes = { write: 'Write', practice: 'Practice', samples: 'Samples', evaluate: 'Check fit', profile: 'Voice profile' };
@@ -285,7 +287,7 @@ function confidencePanel() {
     el('div', {class: 'confidence-bar', role: 'progressbar', 'aria-label': 'Voice confidence evidence readiness', 'aria-valuemin': 0, 'aria-valuemax': confidence.total, 'aria-valuenow': confidence.completed, 'aria-valuetext': progressText, 'aria-describedby': noteId}, Array.from({length: confidence.total}, (_, index) => el('span', {class: index < confidence.completed ? 'is-complete' : '', 'aria-hidden': 'true'}))),
     el('p', {class: 'confidence-progress'}, progressText),
     el('p', {class: 'helper', id: noteId}, 'Evidence readiness, not a measured writing-accuracy score.'),
-    el('div', {class: 'confidence-evidence'}, el('p', {}, el('strong', {}, number(evidence.authored_samples)), ' confirmed authored samples'), helper('Held-out samples excluded.'), el('p', {}, `${number(evidence.feedback)} saved feedback · ${number(evidence.lessons)} active ${evidence.lessons === 1 ? 'lesson' : 'lessons'}`), helper('Feedback and lessons are preferences, not authored writing.')),
+    el('div', {class: 'confidence-evidence'}, el('p', {}, el('strong', {}, number(evidence.authored_samples)), ' confirmed authored samples'), helper('Held-out samples excluded.'), el('p', {}, `${number(evidence.feedback)} saved feedback · ${number(evidence.lessons)} active ${evidence.lessons === 1 ? 'lesson' : 'lessons'}`), helper(`${number(evidence.learned_preferences)} applicable learned preferences · source passages remain separate from authored writing.`)),
     el('p', {class: 'confidence-validation'}, el('strong', {}, number(validation.rated_real)), ' rated real voice comparisons'),
     validation.rated_real > 0 ? outcomes : null,
     confidence.next_step ? el('p', {class: 'helper confidence-next'}, confidence.next_step) : null,
@@ -590,11 +592,13 @@ function draftControls(values, onChange, disabled = false) {
     const output = el('output', {class: 'control-value'}, values[key]);
     const range = input({type: 'range', min: 0, max: 100, step: 1, value: values[key], disabled, 'aria-label': title, onInput: event => {values[key] = Number(event.target.value); output.textContent = event.target.value; onChange({...values});}});
     range.id = uid('range'); output.setAttribute('for', range.id);
-    controls.append(el('div', {class: 'control-row'}, el('label', {class: 'control-label', for: range.id}, title, output), range, el('div', {class: 'range-labels'}, el('span', {}, left), el('span', {}, right))));
+    const documentPolish = key === 'polish' && 'revision' in values;
+    controls.append(el('div', {class: 'control-row'}, el('label', {class: 'control-label', for: range.id}, title, output), range, el('div', {class: 'range-labels'}, el('span', {}, documentPolish ? 'Natural' : left), el('span', {}, documentPolish ? 'More polished' : right))));
   }
   const structure = select([['auto', 'Use my preferences'], ['prose', 'Prose'], ['bullets', 'Bullets']], values.structure, {disabled, onChange: event => {values.structure = event.target.value; onChange({...values});}});
   const register = select([['auto', 'Fit the context'], ['casual', 'Casual'], ['professional', 'Professional'], ['formal', 'Formal']], values.register || 'auto', {disabled, onChange: event => {values.register = event.target.value; onChange({...values});}});
   const row = el('div', {class: 'form-row'}, field('Structure', structure), field('Register', register));
+  if ('revision' in values) row.prepend(field('Revision', select([['rewrite', 'Rewrite in my voice'], ['copyedit', 'Light edit']], values.revision || 'rewrite', {disabled, onChange: event => {values.revision = event.target.value; onChange({...values});}})));
   // Documents only: short copy such as labels, captions and site entries can keep its length.
   if ('length' in values) row.append(field('Length', select([['auto', 'Fit the rewrite'], ['preserve', 'Keep each part about as long']], values.length || 'auto', {disabled, onChange: event => {values.length = event.target.value; onChange({...values});}})));
   return el('div', {}, controls, row, helper('These controls affect this draft. They do not create remembered preferences or authorize new facts.'));
@@ -606,8 +610,13 @@ function renderWrite() {
   return pieces;
 }
 function changeDocument(changes) {
-  if (changes.context) {ui.documentContextPreview = null; document.querySelector('#document-context-preview')?.replaceChildren();}
+  ui.documentDecisions = null;
+  ui.documentWording = null;
+  if (changes.source !== undefined || changes.context || changes.controls) ui.articleWordingDraft = null;
+  if (changes.context || changes.authoredReferences || changes.excludedSampleIds) {ui.documentContextPreview = null; document.querySelector('#document-context-preview')?.replaceChildren();}
+  if (changes.context) ui.documentReferenceCandidates = [];
   ui.document = reviseDocument(ui.document, changes); queueDocumentSave(); refreshDocumentDiagnostics();
+  if (changes.context) document.querySelector('#document-reference-picker')?.replaceWith(documentReferencePicker(ui.documentStarting || activeDocumentJob(ui.document.job)));
 }
 function guardDocumentPaste(control, limit) {
   control.addEventListener('paste', event => {
@@ -635,6 +644,8 @@ async function pollDocumentJob() {
     const kind = ui.document.job.kind;
     ui.document = acceptDocumentJob(ui.document, response); persistDocument();
     if (response.status === 'complete') {
+      ui.documentDecisions = null;
+      ui.documentWording = null;
       if (kind === 'generate' && ui.route === 'write' && ui.writeMode === 'document') render();
       else refreshDocumentDiagnostics(true);
       toast(ui.document.error || (kind === 'generate' ? 'Document ready. Review the source, wording and checks before using it.' : documentChecksCurrent(ui.document) ? 'Checks returned. Review potential issues before using your draft.' : 'Checks returned for an earlier edit. Run checks again for your current text.'), Boolean(ui.document.error));
@@ -661,10 +672,10 @@ async function startDocumentJob(kind) {
   if (doc.source.length > DOCUMENT_SOURCE_LIMIT) throw new Error('The source exceeds 120,000 characters. Nothing was truncated.');
   if (kind === 'check' && !doc.text.trim()) throw new Error('Add or generate a draft before checking it.');
   if (doc.text.length > DOCUMENT_OUTPUT_LIMIT) throw new Error('The draft exceeds 240,000 characters. Nothing was truncated.');
-  const snapshot = {kind, source: doc.source, text: kind === 'check' ? doc.text : '', context: {...doc.context}, controls: {...doc.controls}, revision: doc.revision};
+  const snapshot = {kind, source: doc.source, text: kind === 'check' ? doc.text : '', context: {...doc.context}, controls: {...doc.controls}, authoredReferences: doc.authoredReferences.map(item => ({...item})), excludedSampleIds: [...doc.excludedSampleIds], revision: doc.revision};
   ui.documentStarting = true; ui.documentReplacePrompt = false; ui.document.error = ''; render();
   try {
-    const body = {context: snapshot.context, source: snapshot.source, controls: snapshot.controls};
+    const body = {context: snapshot.context, source: snapshot.source, controls: snapshot.controls, authored_references: snapshot.authoredReferences, excluded_sample_ids: snapshot.excludedSampleIds};
     if (kind === 'check') body.text = snapshot.text;
     const response = await api(kind === 'check' ? '/document-checks' : '/documents', 'POST', body);
     if (!validDocumentJob(response)) throw new Error('The server returned an invalid document job. Your source and current draft are preserved.');
@@ -681,44 +692,247 @@ function trainedContextPicker(onSelect, disabled = false) {
   const picker = select([['', 'Choose a context you have taught…'], ...contexts.map((context, index) => [String(index), [context.channel, context.audience, context.intent].filter(Boolean).join(' · ')])], '', {disabled, onChange: event => {if (event.target.value !== '') onSelect({...contexts[Number(event.target.value)]});}});
   return field('Use a trained context', picker, 'optional');
 }
-function documentContextReport(result) {
+function documentContextReport(result, allowSelectionChanges = false) {
   const report = result?.context_report;
   const body = el('div', {}, helper('Context matching explains which guidance was supplied. It does not measure voice fidelity.'));
   if (report && typeof report === 'object') {
     const context = report.requested_context || report.context || result.source_context;
     if (context) body.append(contextPills(context));
     if (report.counts) body.append(el('p', {class: 'document-guidance-counts'}, `${report.counts.authored_examples || 0} authored examples · ${report.counts.language_lessons || 0} language lessons · ${report.counts.feedback || 0} saved preferences · ${report.counts.priors || 0} confirmed priors`));
+    if (report.sample_selection) {
+      const samples = report.sample_selection;
+      body.append(helper(`${samples.confirmed_non_holdout} confirmed, non-held-out samples available; ${samples.automatic_match_count} eligible automatic matches; ${samples.automatic_selected_ids.length} supplied within the selection budget. ${samples.document_references.length} selected explicitly for this document.`));
+      body.append(helper(samples.notice || 'Automatic selection is a reviewable inference, not a saved preference.'));
+      for (const item of samples.automatic_selections || []) {
+        const entry = el('div', {}, el('p', {}, el('strong', {}, item.title), ` · ${item.cross_context ? 'Automatic transfer from another context' : 'Automatic context match'}`), contextPills(item.source_context), el('p', {}, `Use for: ${item.aspect}`));
+        for (const reason of item.reasons || []) entry.append(helper(reason));
+        if (item.supporting_excerpt) entry.append(el('blockquote', {class: 'provenance-text'}, item.supporting_excerpt));
+        for (const limit of item.limitations || []) entry.append(helper(limit));
+        const source = state.samples.find(sample => sample.id === item.id);
+        if (source) entry.append(details('Read current saved excerpt', el('div', {}, helper('The saved sample may have changed since this selection. The reason and supporting passage above belong to the recorded selection.'), el('pre', {class: 'provenance-text'}, source.text.slice(0, item.supplied_characters)))));
+        if (allowSelectionChanges) {
+          const exclude = button('Exclude from this document', () => {changeDocument({excludedSampleIds: [...ui.document.excludedSampleIds, item.id]}); persistDocument(); render(); toast('Sample excluded for this document. Preview again to see updated choices.');}, 'small');
+          exclude.disabled = ui.documentStarting || activeDocumentJob(ui.document.job) || ui.document.excludedSampleIds.length >= 100;
+          entry.append(exclude);
+        }
+        body.append(details(`Why this sample? ${item.title}`, entry));
+      }
+      for (const item of samples.document_references) body.append(el('p', {}, el('strong', {}, item.title), ` · ${item.source_context.channel || 'Unknown context'} · Use for: ${item.aspect}`));
+    }
     for (const [key, label] of [['changes', 'Context changes'], ['matches', 'Recognized matches'], ['warnings', 'Scope warnings'], ['supplied', 'Supplied guidance']]) {
       if (report[key] && (!Array.isArray(report[key]) || report[key].length)) body.append(el('h3', {}, label), el('pre', {class: 'provenance-text'}, typeof report[key] === 'string' ? report[key] : JSON.stringify(report[key], null, 2)));
     }
-    const remainder = Object.fromEntries(Object.entries(report).filter(([key]) => !['requested_context', 'context', 'changes', 'matches', 'warnings', 'supplied', 'counts'].includes(key)));
-    if (Object.keys(remainder).length) body.append(el('pre', {class: 'provenance-text'}, JSON.stringify(remainder, null, 2)));
+    const remainder = Object.fromEntries(Object.entries(report).filter(([key]) => !['requested_context', 'context', 'changes', 'matches', 'warnings', 'supplied', 'counts', 'reference_candidates'].includes(key)));
+    if (Object.keys(remainder).length) body.append(details('Selection details', el('pre', {class: 'provenance-text'}, JSON.stringify(remainder, null, 2))));
   } else body.append(helper('No context matching report was returned for this draft.'));
-  const sources = (Array.isArray(result?.evidence_ids) ? result.evidence_ids : []).map(id => state.samples.find(sample => String(sample.id) === String(id))).filter(Boolean);
+  const evidenceIds = result?.evidence_ids || report?.evidence_ids;
+  const sources = (Array.isArray(evidenceIds) ? evidenceIds : []).map(id => state.samples.find(sample => String(sample.id) === String(id))).filter(Boolean);
   body.append(sources.length ? el('ul', {class: 'evidence-list'}, sources.map(sample => el('li', {}, sample.title || 'Untitled authored sample'))) : helper('No confirmed authored sample references were returned.'));
   for (const warning of Array.isArray(result?.warnings) ? result.warnings : []) body.append(helper(warning));
   return details('Context, supplied guidance & limitations', body);
 }
+function documentVoiceEvidence(item) {
+  const body = el('div', {});
+  if (item?.source_quote) body.append(el('p', {}, el('strong', {}, 'Before: '), item.source_quote));
+  if (item?.draft_quote) body.append(el('p', {}, el('strong', {}, 'After: '), item.draft_quote));
+  for (const [key, label] of [['register', 'Register'], ['perspective', 'Personal perspective']]) {
+    const effect = item?.voice_effects?.[key];
+    if (effect?.reason) body.append(el('p', {}, el('strong', {}, `${label}: `), effect.reason));
+  }
+  if (item?.basis) body.append(el('p', {}, item.basis));
+  if (item?.classification_note) body.append(helper(item.classification_note));
+  for (const ref of Array.isArray(item?.preference_refs) ? item.preference_refs : []) {
+    body.append(el('p', {}, el('strong', {}, 'Supplied preference: '), ref.guidance || ''), helper(`${ref.origin || 'guidance'} · ${ref.id || ''}`));
+  }
+  return details('Why this classification?', body);
+}
+function documentDecisionRequest() {
+  const doc = ui.document;
+  return {source: doc.source, text: doc.text, context: {...doc.context}, controls: {...doc.controls}};
+}
+async function refreshDocumentDecisions() {
+  const request = documentDecisionRequest();
+  const response = await api('/document-decisions/resolve', 'POST', request);
+  if (JSON.stringify(request) !== JSON.stringify(documentDecisionRequest())) return;
+  ui.documentDecisions = response;
+  refreshDocumentDiagnostics();
+}
+function keepDocumentWordingButton(item, current, checking) {
+  const keep = button('Keep this wording for this article', async () => busy(keep, async () => {
+    const request = documentDecisionRequest();
+    const response = await api('/document-decisions', 'POST', {...request, suggestion: item, reason: 'Keep this optional rephrase in this article.'});
+    ui.documentDecisions = JSON.stringify(request) === JSON.stringify(documentDecisionRequest()) ? response.decisions : null;
+    ui.document = documentDecisionChanged(ui.document); persistDocument(); refreshDocumentDiagnostics();
+    toast('Kept for this article. Future rewrites receive this wording; run checks again for the current draft.');
+  }, 'Saving…'), 'small');
+  keep.disabled = !current || checking || !item.source_quote || !item.draft_quote;
+  return keep;
+}
+function documentDecisionPanel(current, checking) {
+  const snapshot = ui.documentDecisions || (current ? ui.document.result?.checks?.document_decisions : null);
+  const refresh = button('Review saved article decisions', () => busy(refresh, refreshDocumentDecisions, 'Loading…'), 'small');
+  refresh.disabled = checking || !ui.document.source.trim() || !ui.document.text.trim();
+  const panel = el('section', {class: 'document-kept-wording'}, el('h4', {}, 'Wording you chose to keep'),
+    helper('Future rewrites receive the accepted wording for this original article and context. Later passage edits are still reviewed. Meaning and independent preference problems remain checked; this does not teach a general rule.'), refresh);
+  if (!snapshot) return panel;
+  const choiceReview = current ? ui.document.result?.checks?.document_decision_review : null;
+  if (choiceReview?.status === 'checked' && choiceReview.choices?.length) {
+    const changed = choiceReview.choices.filter(item => item.scope === 'changed_passage').length;
+    panel.append(helper(`This review considered ${choiceReview.choices.length} saved article choice(s)${changed ? `, including ${changed} changed passage(s) as historical context` : ''}. Only the specific accepted style tradeoff is covered; meaning and independent preference problems remain checked.`));
+  }
+  if (!snapshot.items?.length) panel.append(helper('No saved keep decisions for this original article. Changing the original source starts a separate scope.'));
+  for (const item of snapshot.items || []) {
+    const entry = el('div', {class: 'document-check-column'}, el('p', {}, el('strong', {}, item.status === 'revoked' ? 'Decision undone' : item.applicability === 'applicable' ? 'Kept for this article' : 'Saved · not applied')),
+      helper(item.applicability_reason || ''), el('blockquote', {class: 'provenance-text'}, item.finding?.draft_quote || ''), el('p', {}, item.reason || ''),
+      details('Review scope and history', el('div', {}, helper(`Article: ${item.title}. Original source: ${item.source_hash}.`), contextPills(item.context),
+        el('p', {}, el('strong', {}, 'Original wording: '), item.finding?.source_quote || ''), el('p', {}, item.finding?.message || ''),
+        helper('Matches the exact paired quotations and preference references inside the unchanged paragraph. Different quote boundaries or nearby edits stay visible for review.'),
+        el('ul', {}, (item.history || []).map(event => el('li', {}, `${event.action} · ${event.created_at}`))))));
+    if (item.status === 'active') {
+      const undo = button('Undo keep decision', () => busy(undo, async () => {
+        await api(`/document-decisions/${encodeURIComponent(item.id)}/revoke`, 'POST', {});
+        ui.document = documentDecisionChanged(ui.document); persistDocument();
+        await refreshDocumentDecisions();
+        toast('Decision undone. Your text is unchanged; rerun checks to reconsider suggestions.');
+      }, 'Undoing…'), 'small quiet');
+      undo.disabled = checking; entry.append(undo);
+    }
+    panel.append(entry);
+  }
+  const accepted = current ? ui.document.result?.checks?.voice?.accepted_suggestions || [] : [];
+  if (accepted.length) panel.append(details(`Suggestions you already chose to keep (${accepted.length})`, el('div', {}, accepted.map(item => el('div', {},
+    el('p', {}, item.message), helper('Already kept by you; not repeated as an open style suggestion.'), documentVoiceEvidence(item))))));
+  return panel;
+}
+function documentWordingRequest() {
+  const doc = ui.document;
+  return {source: doc.source, context: {...doc.context}, controls: {...doc.controls}};
+}
+async function refreshArticleWording() {
+  const request = documentWordingRequest();
+  const response = await api('/document-wording/resolve', 'POST', request);
+  if (JSON.stringify(request) !== JSON.stringify(documentWordingRequest())) return;
+  ui.documentWording = response;
+  refreshDocumentDiagnostics();
+}
+function articleWordingPanel(current, checking) {
+  const snapshot = ui.documentWording || (current ? ui.document.result?.checks?.document_wording : null);
+  const panel = el('section', {class: 'document-kept-wording'}, el('h4', {}, 'Exact wording for this article'),
+    helper('Save a phrase you explicitly want retained or corrected in this article. Rewrites and revisions receive it; unmet wording stays visible. This does not train your general voice.'));
+  const refresh = button('Review saved wording corrections', () => busy(refresh, refreshArticleWording, 'Loading…'), 'small');
+  refresh.disabled = checking || !ui.document.source.trim(); panel.append(refresh);
+  if (snapshot && !snapshot.items?.length) panel.append(helper('No saved wording corrections for this original article.'));
+  for (const item of snapshot?.items || []) {
+    const entry = el('div', {class: 'document-check-column'}, el('strong', {}, item.status === 'revoked' ? 'Correction undone' : item.applicability === 'applicable' ? 'Active for this article' : 'Saved · not applied'),
+      el('blockquote', {class: 'provenance-text'}, item.wording), helper(item.applicability_reason),
+      details('Reason, scope and history', el('div', {}, el('p', {}, item.reason), el('p', {}, 'Original wording: ', item.source_quote),
+        contextPills(item.context), helper(`Original article: ${item.source_hash}`),
+        el('ul', {}, (item.history || []).map(event => el('li', {}, `${event.action} · ${event.created_at}`))))));
+    if (item.status === 'active') {
+      const undo = button('Undo wording correction', () => busy(undo, async () => {
+        await api(`/document-wording/${encodeURIComponent(item.id)}/revoke`, 'POST', {});
+        ui.document = documentDecisionChanged(ui.document); persistDocument();
+        await refreshArticleWording(); toast('Correction undone. Your text is unchanged.');
+      }, 'Undoing…'), 'small quiet');
+      undo.disabled = checking; entry.append(undo);
+    }
+    panel.append(entry);
+  }
+  const pending = ui.articleWordingDraft ||= {source_quote: '', wording: '', reason: ''};
+  const original = el('textarea', {rows: 2, maxlength: 1000, value: pending.source_quote, disabled: checking, 'aria-label': 'Exact phrase from original article', onInput: e => {pending.source_quote = e.target.value;}});
+  const preferred = el('textarea', {rows: 2, maxlength: 1000, value: pending.wording, disabled: checking, 'aria-label': 'Wording to use in this article', onInput: e => {pending.wording = e.target.value;}});
+  const reason = el('textarea', {rows: 2, maxlength: 1000, value: pending.reason, disabled: checking, 'aria-label': 'Reason for article wording correction', onInput: e => {pending.reason = e.target.value;}});
+  const save = button('Save wording for this article', () => busy(save, async () => {
+    const request = documentWordingRequest();
+    const response = await api('/document-wording', 'POST', {...request, ...pending});
+    ui.documentWording = JSON.stringify(request) === JSON.stringify(documentWordingRequest()) ? response.corrections : null;
+    ui.articleWordingDraft = null;
+    ui.document = documentDecisionChanged(ui.document); persistDocument(); refreshDocumentDiagnostics();
+    toast('Saved for this article. The next rewrite will receive this wording; your current draft is unchanged.');
+  }, 'Saving…'), 'small');
+  save.disabled = checking || !ui.document.source.trim();
+  panel.append(details('Add an article wording correction', el('div', {}, field('Exact phrase from the original source', original),
+    field('Wording to use', preferred), helper('Use the same phrase in both fields to preserve it. Select a unique prose passage; changing the original article, context or controls starts a different scope.'),
+    field('Why you want this wording', reason), save)));
+  return panel;
+}
 function documentReviewContents() {
   const doc = ui.document, checking = ui.documentStarting || activeDocumentJob(doc.job);
   const current = documentChecksCurrent(doc), checks = doc.result?.checks;
-  const summary = !checks ? 'Not checked' : !current ? 'Checks need rerunning' : checks.status === 'not_checked' ? 'Not checked' : checks.status === 'checked' ? 'Checks returned · review before use' : 'Review required';
-  const content = el('div', {}, el('div', {class: 'review-top'}, el('h3', {}, 'Content & voice review'), badge(summary, current && checks?.status === 'checked' ? 'muted' : 'amber')), helper('Checks flag potential content and voice issues. They can miss omissions or factual changes and do not guarantee fidelity. Human review is required before use.'));
-  if (checks && !current) content.append(el('p', {class: 'document-stale'}, checking ? 'A request is in progress. Previous checks do not validate the current draft.' : 'The source, draft, context or controls changed after these checks. Run checks again for the current version.'));
+  const summary = !checks ? 'Not checked' : !current ? 'Checks need rerunning' : checks.status === 'not_checked' ? 'Not checked' : checks.status === 'checked' ? 'Checks completed' : 'Review required';
+  const content = el('div', {}, el('div', {class: 'review-top'}, el('h3', {}, 'Content & voice review'), badge(summary, current && checks?.status === 'checked' ? 'muted' : 'amber')), helper('Checks report potential content and preference problems separately from optional suggestions and evidence coverage. They can miss errors; use them alongside your own review.'));
+  const edits = doc.result?.revision_summary;
+  if (Number.isInteger(edits?.source_words) && Number.isInteger(edits?.draft_words) && Number.isInteger(edits?.retained_source_words)) {
+    content.append(helper(`${current && doc.result.text === doc.text ? 'Generated draft' : 'Earlier generated draft'}: ${edits.source_words} source words, ${edits.draft_words} draft words; ${edits.retained_source_words} source words retained in matching runs. ${edits.notice || 'Wording overlap is not voice accuracy.'}`));
+  }
+  if (checks && !current) content.append(el('p', {class: 'document-stale'}, checking ? 'A request is in progress. Previous checks do not validate the current draft.' : 'The text, context, controls or saved article decisions changed after these checks. Run checks again for the current version.'));
   if (checks) {
     if (checks.limitation) content.append(helper(checks.limitation));
-    for (const warning of Array.isArray(checks.warnings) ? checks.warnings : []) content.append(helper(warning));
+    const concerns = Array.isArray(checks.warnings) ? checks.warnings : [];
+    if (concerns.length) content.append(el('section', {class: 'document-review-concerns'}, el('h4', {}, 'Unresolved review concerns'), el('ul', {}, concerns.map(warning => el('li', {}, warning)))));
     if (Number.isInteger(checks.review?.units_completed) && Number.isInteger(checks.review?.units_total)) content.append(helper(`Review coverage: ${checks.review.units_completed} of ${checks.review.units_total} review units completed${checks.review.status === 'not_checked' ? ' · semantic review not performed' : ''}.`));
     const columns = el('div', {class: 'document-checks-grid'});
     for (const [key, title] of [['content', 'Content preservation'], ['voice', 'Voice & presentation']]) {
       const check = checks[key];
       const issues = Array.isArray(check?.issues) ? check.issues : [];
-      const column = el('section', {class: 'document-check-column'}, el('h4', {}, title), helper(!current ? 'Earlier version · not current' : check?.status === 'not_checked' || !check ? 'Not checked' : check.status === 'checked' ? 'Review returned findings' : 'Review required'));
-      if (!issues.length) column.append(helper(check?.status === 'not_checked' || !check ? 'No substantive check was performed.' : 'No potential issues were reported. This does not establish correctness.'));
-      else column.append(el('ul', {class: 'document-issues'}, issues.map(issue => el('li', {}, el('strong', {}, `${issue?.severity || 'review'}${issue?.section ? ` · ${issue.section}` : ''}`), el('p', {}, issue?.message || 'Review this passage.'), issue?.code && el('span', {class: 'helper'}, issue.code)))));
+      const column = el('section', {class: 'document-check-column'}, el('h4', {}, title), helper(!current ? 'Earlier version · not current' : check?.status === 'not_checked' || !check ? 'Not checked' : check.status === 'checked' ? 'Review completed' : 'Review required'));
+      if (!issues.length) column.append(helper(check?.status === 'not_checked' || !check ? 'No substantive check was performed.' : key === 'voice' ? 'No preference violations were reported. This is not proof of personal fit.' : 'No potential issues were reported. This does not establish correctness.'));
+      else column.append(el('ul', {class: 'document-issues'}, issues.map(issue => el('li', {},
+        el('strong', {}, `${issue?.label || (key === 'voice' ? 'Unclassified earlier finding' : issue?.severity || 'Review')}${issue?.change_id ? ` · ${issue.change_id}` : ''}${issue?.section ? ` · ${issue.section}` : ''}`),
+        el('p', {}, issue?.message || 'Review this passage.'),
+        key === 'voice' && issue?.effect_summary && helper(issue.effect_summary),
+        key === 'voice' && !issue?.classification && helper('Rerun checks to assess this earlier finding against the current preference criteria.'),
+        key === 'voice' && issue?.classification && documentVoiceEvidence(issue),
+        Array.isArray(issue?.evidence) && issue.evidence.length ? details(`Supporting checks (${issue.evidence.length})`,
+          el('ul', {}, issue.evidence.map(signal => el('li', {}, `${signal?.origin || 'review'} · ${signal?.code || 'finding'}: ${signal?.message || 'Review this signal.'}`)))) : issue?.code && el('span', {class: 'helper'}, issue.code)))));
       columns.append(column);
     }
     content.append(columns);
+    const coverage = Array.isArray(checks.coverage_notices) ? checks.coverage_notices : [];
+    if (coverage.length) content.append(el('section', {class: 'document-coverage-notices'},
+      el('h4', {}, `Evidence coverage${!current ? ' · earlier version' : ''}`),
+      helper('These notices describe the supplied evidence. They do not identify a problem with the wording.'),
+      el('ul', {}, coverage.map(notice => el('li', {}, notice.message || 'Evidence coverage information.')))));
+    const suggestions = Array.isArray(checks.voice?.suggestions) ? checks.voice.suggestions : [];
+    if (suggestions.length) {
+      content.append(el('section', {class: 'document-style-suggestions'},
+        el('h4', {}, `Optional style suggestions (${suggestions.length})${!current ? ' · earlier version' : ''}`),
+        helper('These do not require a change. Keep the current wording if it suits this passage.'),
+        el('ul', {}, suggestions.map(item => el('li', {}, el('p', {}, item.message || 'Consider this optional alternative.'), item.effect_summary && helper(item.effect_summary), documentVoiceEvidence(item), keepDocumentWordingButton(item, current, checking))))));
+    }
+    if (checks.voice?.notice) content.append(helper(checks.voice.notice));
+    const wording = checks.meaning_changes;
+    if (Array.isArray(wording?.checks) && (wording.checks.length || wording.omitted)) {
+      const notes = el('div', {}, helper(wording.notice || 'Meaning assessments compare wording in context; they do not verify facts.'));
+      const assessed = wording.checks.filter(item => item?.reviewed === true).length;
+      notes.append(helper(`${assessed} of ${wording.checks.length} planned edit candidates assessed · ${wording.checks.length - assessed} not assessed`));
+      for (const item of wording.checks) {
+        if (!item || typeof item !== 'object') continue;
+        const label = !item.reviewed ? 'Not assessed' : item.verdict === 'preserved' ? 'Meaning appears preserved' : item.verdict === 'changed' ? `${item.label || 'Meaning changed'} · review` : 'Uncertain · review';
+        notes.append(el('section', {class: 'document-check-column'}, el('h4', {}, label),
+          helper(`${item.change_id || 'Edit'}${item.section ? ` · ${item.section}` : ''}${item.assessment_scope === 'combined' ? ' · related changes assessed together' : ''}${!current ? ' · earlier version' : ''}`),
+          el('p', {}, el('strong', {}, 'Before: '), item.source_quote || '(Insertion)'),
+          el('p', {}, el('strong', {}, 'After: '), item.draft_quote || '(Text removed)'),
+          el('p', {}, item.reason || 'Review this change in context.'),
+          (item.source_context || item.draft_context) && details('Read edit in context', el('div', {},
+            el('p', {}, el('strong', {}, 'Source context: '), item.source_context || '(No source context)'),
+            el('p', {}, el('strong', {}, 'Draft context: '), item.draft_context || '(No draft context)')))));
+      }
+      if (wording.omitted) notes.append(helper(`${wording.omitted} additional wording changes need review; the bounded assessment did not cover them.`));
+      content.append(details('Individual edits & meaning', notes));
+    }
+  }
+  content.append(documentDecisionPanel(current, checking));
+  content.append(articleWordingPanel(current, checking));
+  const instructions = checks?.article_wording;
+  if (instructions?.items?.length || instructions?.skipped?.length) {
+    const applied = instructions.items || [];
+    const notes = el('div', {}, helper(instructions.notice || 'Literal wording compliance is separate from meaning and voice review.'),
+      applied.map(item => el('div', {class: 'document-check-column'}, el('strong', {}, `${item.status === 'retained' ? 'Wording retained' : item.required ? 'Wording not followed' : 'Kept wording changed · review its new context'}${current ? '' : ' · earlier version'}`),
+        el('blockquote', {class: 'provenance-text'}, item.required_text), helper(`${item.kind === 'kept_rephrase' ? 'Saved keep decision' : 'Article wording correction'} · ${item.status.replaceAll('_', ' ')}`))),
+      (instructions.skipped || []).map(item => helper(`Not applied: ${item.reason}`)),
+      (instructions.attempts || []).length && details('Generation attempts', el('ul', {}, instructions.attempts.map(item => el('li', {}, `${item.stage} · attempt ${item.attempt} · ${item.status || `${item.unmet?.length || 0} unmet instruction(s)`}`)))));
+    content.append(details('Article wording in this result', notes));
   }
   const recheck = button(checking ? 'Request in progress…' : checks ? 'Run checks again' : 'Check current draft', () => busy(recheck, () => startDocumentJob('check'), 'Starting…'), 'small', 'shield');
   recheck.disabled = checking || !doc.text.trim() || !doc.source.trim();
@@ -740,15 +954,53 @@ function documentEvidenceContents() {
   const doc = ui.document;
   return doc.result ? [documentContextReport(doc.result), doc.checkedSource && details('Preserved source used for the last result', el('div', {}, helper('This snapshot remains unchanged when you edit the source field above.'), el('textarea', {class: 'document-preserved-source', readonly: true, rows: 8, value: doc.checkedSource, 'aria-label': 'Preserved source for last result'})))] : [];
 }
+function documentActionLabel(working = false) {
+  if (working) return 'Request in progress…';
+  if (!isLive()) return 'Rehearse document rewrite';
+  return ui.document.controls.revision === 'copyedit' ? 'Lightly edit document' : 'Rewrite in my voice';
+}
 function refreshDocumentDiagnostics(includeEvidence = false) {
   const working = ui.documentStarting || activeDocumentJob(ui.document.job);
   const submit = document.querySelector('#document-submit');
-  if (submit) {submit.disabled = working; submit.textContent = working ? 'Request in progress…' : isLive() ? 'Rewrite whole document' : 'Rehearse document rewrite';}
+  if (submit) {submit.disabled = working; submit.textContent = documentActionLabel(working);}
   const file = document.querySelector('#document-file'); if (file) file.disabled = working;
   const evidence = document.querySelector('#document-evidence');
   if (evidence && includeEvidence) {evidence.replaceChildren(...documentEvidenceContents().filter(Boolean)); evidence.hidden = !ui.document.result;}
   document.querySelector('#document-review')?.replaceChildren(documentReviewContents());
   document.querySelector('#document-job-status')?.replaceChildren(documentJobContents() || '');
+}
+function documentReferencePicker(disabled) {
+  const selected = ui.document.authoredReferences;
+  const body = el('div', {}, helper('Use a specific quality from other confirmed writing. References keep their original context and do not become article samples or saved preferences. Changing context clears the selection.'));
+  for (const id of ui.document.excludedSampleIds) {
+    const sample = state.samples.find(item => item.id === id);
+    const restore = button('Allow automatic selection again', () => {changeDocument({excludedSampleIds: ui.document.excludedSampleIds.filter(item => item !== id)}); persistDocument(); render();}, 'small'); restore.disabled = disabled;
+    body.append(el('p', {}, `Excluded from this document: ${sample?.title || 'Unavailable sample'}`), restore);
+  }
+  for (const item of selected) {
+    const sample = state.samples.find(value => value.id === item.id);
+    const remove = button('Remove reference', () => {changeDocument({authoredReferences: ui.document.authoredReferences.filter(value => value.id !== item.id)}); persistDocument(); render();}, 'small'); remove.disabled = disabled;
+    body.append(el('p', {}, el('strong', {}, sample?.title || 'Unavailable sample'), ` · ${item.aspect}`), remove);
+    if (sample) body.append(details('Read selected writing and original context', el('div', {}, contextPills(sample.context), el('pre', {class: 'provenance-text'}, sample.text))));
+  }
+  const candidates = (ui.documentReferenceCandidates || []).filter(item => !selected.some(value => value.id === item.id));
+  if (!candidates.length) body.append(helper(ui.documentReferenceCandidates?.length ? 'All available references in this preview are already selected.' : 'Preview matching guidance to load available confirmed writing.'));
+  else if (selected.length < 6) {
+    const samplePreview = el('div');
+    const picker = select([['', 'Choose a confirmed sample…'], ...candidates.map(item => [item.id, `${item.title} · ${item.context.channel}`])], '', {disabled, 'aria-label': 'Authored reference sample', onChange: event => {
+      const sample = state.samples.find(item => item.id === event.target.value);
+      samplePreview.replaceChildren(...(sample ? [contextPills(sample.context), el('pre', {class: 'provenance-text'}, sample.text)] : []));
+    }});
+    const aspect = el('textarea', {rows: 2, maxlength: 500, disabled, 'aria-label': 'Writing quality to use', placeholder: 'For example: how I explain a problem and preserve a caveat. Keep the article’s register and structure.'});
+    const add = button('Use this reference', () => {
+      if (!picker.value || !aspect.value.trim()) {toast('Choose a sample and name the writing quality to use.', true); return;}
+      changeDocument({authoredReferences: [...ui.document.authoredReferences, {id: picker.value, aspect: aspect.value.trim()}], excludedSampleIds: ui.document.excludedSampleIds.filter(id => id !== picker.value)}); persistDocument(); render();
+    }, 'small'); add.disabled = disabled;
+    body.append(field('Authored writing', picker), samplePreview, field('Quality to use in this document', aspect), add);
+  }
+  const pickerSection = details(`Authored references for this document · ${selected.length}`, body);
+  pickerSection.id = 'document-reference-picker';
+  return pickerSection;
 }
 function renderDocumentWrite() {
   const doc = ui.document;
@@ -773,17 +1025,18 @@ function renderDocumentWrite() {
   });
   const trained = trainedContextPicker(value => {changeDocument({context: value}); persistDocument(); render();}, generating);
   const preview = button('Preview matching guidance', () => busy(preview, async () => {
-    const selectedContext = JSON.stringify(ui.document.context);
-    const report = await api('/context/resolve', 'POST', {context: {...ui.document.context}});
-    if (selectedContext !== JSON.stringify(ui.document.context)) {toast('Context changed while previewing. Preview the current context again.', true); return;}
+    const selectedContext = JSON.stringify([ui.document.context, ui.document.authoredReferences, ui.document.excludedSampleIds]);
+    const report = await api('/context/resolve', 'POST', {context: {...ui.document.context}, authored_references: ui.document.authoredReferences, excluded_sample_ids: ui.document.excludedSampleIds});
+    if (selectedContext !== JSON.stringify([ui.document.context, ui.document.authoredReferences, ui.document.excludedSampleIds])) {toast('Context or references changed while previewing. Preview again.', true); return;}
     ui.documentContextPreview = report.context_report || report;
-    document.querySelector('#document-context-preview')?.replaceChildren(documentContextReport({context_report: ui.documentContextPreview}));
+    ui.documentReferenceCandidates = ui.documentContextPreview.reference_candidates || []; render();
   }, 'Matching…'), 'small'); preview.disabled = generating;
-  const previewArea = el('div', {id: 'document-context-preview'}, ui.documentContextPreview && documentContextReport({context_report: ui.documentContextPreview}));
+  const previewArea = el('div', {id: 'document-context-preview'}, ui.documentContextPreview && documentContextReport({context_report: ui.documentContextPreview}, true));
   const adjustments = draftControls({...doc.controls}, value => changeDocument({controls: value}), generating);
-  const submit = button(working ? 'Request in progress…' : isLive() ? 'Rewrite whole document' : 'Rehearse document rewrite', null, 'primary', 'write'); submit.type = 'submit'; submit.id = 'document-submit'; submit.disabled = working;
+  const submit = button(documentActionLabel(working), null, 'primary', 'write'); submit.type = 'submit'; submit.id = 'document-submit'; submit.disabled = working;
   const sourceDownload = button('Download source', () => downloadDocumentText(ui.document.source, (ui.document.sourceName || 'document-source.md').replace(/[\/\\]/g, '_')), 'small quiet', 'download'); sourceDownload.disabled = !doc.source; source.addEventListener('input', () => {sourceDownload.disabled = !ui.document.source;});
   const form = el('form', {class: 'panel document-input'}, panelHeading('Your original document', 'Plain text or Markdown. The complete source stays separate from the draft.'), el('div', {class: 'panel-body'}, field('Read a local file', file), helper('Choosing a file reads it in this browser. Generation or checks send its text to the local server and, with a live provider, to your configured model provider.'), field('Or paste the document', source), el('div', {class: 'document-source-meta'}, count, sourceDownload), doc.sourceName && helper(`Local file: ${doc.sourceName}`), trained, context.node, el('div', {class: 'document-context-preview'}, preview, previewArea), details('Adjust this document', adjustments)), el('div', {class: 'panel-foot'}, helper('Preserve the substance. Review every important change.'), submit));
+  form.querySelector('.panel-body').append(documentReferencePicker(working));
   form.addEventListener('submit', event => {event.preventDefault(); if (ui.documentStarting || activeDocumentJob(ui.document.job)) return; if (ui.document.text) {ui.documentReplacePrompt = true; render(); return;} busy(submit, () => startDocumentJob('generate'), 'Starting…');});
   if (ui.documentReplacePrompt) {
     const replace = button('Generate a replacement', () => busy(replace, () => startDocumentJob('generate'), 'Starting…'), 'small primary');
@@ -796,8 +1049,10 @@ function renderDocumentWrite() {
   const copy = button('Copy current text', async () => {try {await navigator.clipboard.writeText(ui.document.text); toast('Current edited text copied. No training was saved.');} catch {toast('Clipboard access was denied. Select the draft and copy it directly.', true);}}, 'small', 'copy');
   const downloadMd = button('Download .md', () => downloadDocumentText(ui.document.text, documentDownloadName(ui.document.sourceName, 'md')), 'small', 'download');
   const downloadTxt = button('Download .txt', () => downloadDocumentText(ui.document.text, documentDownloadName(ui.document.sourceName, 'txt')), 'small');
-  const updateExport = () => {for (const control of [copy, downloadMd, downloadTxt]) control.disabled = !ui.document.text;}; updateExport(); draft.addEventListener('input', updateExport);
-  output.append(draft, el('div', {class: 'draft-edit-toolbar'}, textCount, el('div', {class: 'button-group'}, copy, downloadMd, downloadTxt), helper('Whole documents are not sent to “Remember this correction.” Teach a specific preference in Practice when useful.')),
+  const teach = button('Learn from my edit', teachDocumentPreference, 'small');
+  const identityTeach = button('Learn identity from this edit', teachDocumentIdentity, 'small');
+  const updateExport = () => {teach.disabled = generating || !ui.document.text || ui.document.text === (ui.document.result?.text || ui.document.checkedSource || ui.document.source); identityTeach.disabled = teach.disabled; for (const control of [copy, downloadMd, downloadTxt]) control.disabled = !ui.document.text;}; updateExport(); draft.addEventListener('input', updateExport);
+  output.append(draft, el('div', {class: 'draft-edit-toolbar'}, textCount, el('div', {class: 'button-group'}, copy, downloadMd, downloadTxt, teach, identityTeach), helper('Learn from a specific edit after reviewing its style takeaway and meaning. The rest of this document stays separate from training.')),
     el('div', {class: 'document-review', id: 'document-review'}, documentReviewContents()));
   output.append(el('div', {class: 'evidence', id: 'document-evidence', hidden: !doc.result}, documentEvidenceContents()));
   const pieces = [pageHeading('Writing / whole documents', 'Keep the substance. Find your voice.', 'Rewrite a complete document in context, then inspect content and voice separately.')];
@@ -824,14 +1079,16 @@ function renderMessageWrite() {
     const draftEditor = el('textarea', {class: 'draft-editor', value: ui.editedDraft, maxlength: 30000, rows: 12, 'aria-label': 'Edit your draft', readonly: ui.generating || Boolean(ui.rememberDraft)});
     const editStatus = helper(ui.draft.teaching_baseline && !draftHasTeachingChanges() ? (ui.draft.teaching_baseline_reason === 'dismissed' ? 'Current edits kept for this message only.' : ui.draft.teaching_baseline_reason === 'undone' ? 'Your draft edit remains. The remembered lesson was undone.' : 'This correction was remembered. Future edits stay separate.') : draftHasEdits() ? 'Edited by you. These changes have not been remembered.' : 'Generated draft. Editing alone teaches nothing.');
     const remember = button('Remember this correction', openCorrectionPreview, 'small primary'); remember.disabled = !draftHasTeachingChanges() || ui.generating || Boolean(ui.rememberDraft);
+    const teach = button('Learn from my edit', () => teachPreference({source_kind:'edit',before_text:currentTeachingBaseline(),after_text:ui.editedDraft,context:ui.draft.context}), 'small'); teach.disabled = !draftHasTeachingChanges() || ui.generating;
+    const identityTeach = button('Learn identity from this edit', () => teachIdentity({kind:'edit',before_text:currentTeachingBaseline(),after_text:ui.editedDraft,context:ui.draft.context}), 'small'); identityTeach.disabled = teach.disabled;
     const undo = button(draftHasEdits() ? 'Undo my edits' : 'Restore my edits', () => {
       if (draftHasEdits()) { ui.draftUndo = ui.editedDraft; ui.editedDraft = currentDraftOriginal(); }
       else if (ui.draftUndo !== null) { ui.editedDraft = ui.draftUndo; ui.draftUndo = null; }
       ui.rememberDraft = null; persistEditor(); render();
     }, 'small quiet'); undo.disabled = (!draftHasEdits() && ui.draftUndo === null) || ui.generating || Boolean(ui.rememberDraft);
-    draftEditor.addEventListener('input', () => { ui.editedDraft = draftEditor.value; persistEditor(); remember.disabled = !draftHasTeachingChanges() || ui.generating; undo.disabled = !draftHasEdits() && ui.draftUndo === null; undo.textContent = draftHasEdits() ? 'Undo my edits' : 'Restore my edits'; editStatus.textContent = ui.draft.teaching_baseline && !draftHasTeachingChanges() ? (ui.draft.teaching_baseline_reason === 'dismissed' ? 'Current edits kept for this message only.' : ui.draft.teaching_baseline_reason === 'undone' ? 'Your draft edit remains. The remembered lesson was undone.' : 'This correction was remembered. Future edits stay separate.') : draftHasEdits() ? 'Edited by you. These changes have not been remembered.' : 'Generated draft. Editing alone teaches nothing.'; });
+    draftEditor.addEventListener('input', () => { ui.editedDraft = draftEditor.value; persistEditor(); remember.disabled = !draftHasTeachingChanges() || ui.generating; teach.disabled = !draftHasTeachingChanges() || ui.generating; identityTeach.disabled = teach.disabled; undo.disabled = !draftHasEdits() && ui.draftUndo === null; undo.textContent = draftHasEdits() ? 'Undo my edits' : 'Restore my edits'; editStatus.textContent = ui.draft.teaching_baseline && !draftHasTeachingChanges() ? (ui.draft.teaching_baseline_reason === 'dismissed' ? 'Current edits kept for this message only.' : ui.draft.teaching_baseline_reason === 'undone' ? 'Your draft edit remains. The remembered lesson was undone.' : 'This correction was remembered. Future edits stay separate.') : draftHasEdits() ? 'Edited by you. These changes have not been remembered.' : 'Generated draft. Editing alone teaches nothing.'; });
     const copy = button('Copy current draft', async () => { try { await navigator.clipboard.writeText(ui.editedDraft); toast('Your current draft was copied. No learning was saved.'); } catch { toast('Clipboard access was denied. Select the draft text and copy it directly.', true); } }, 'small', 'copy');
-    output.append(draftEditor, el('div', {class: 'draft-edit-toolbar'}, editStatus, el('div', {class: 'button-group'}, copy, undo)), el('div', {class: 'panel-foot'}, helper('Only an explicitly confirmed correction becomes a lesson.'), remember));
+    output.append(draftEditor, el('div', {class: 'draft-edit-toolbar'}, editStatus, el('div', {class: 'button-group'}, copy, undo, teach, identityTeach)), el('div', {class: 'panel-foot'}, helper('Only an explicitly confirmed correction becomes a lesson.'), remember));
     const evidenceSamples = (ui.draft.evidence_ids || []).map(id => state.samples.find(sample => String(sample.id) === String(id))).filter(Boolean);
     output.append(el('div', {class: 'evidence'}, contextPills(ui.draft.context), details('Draft context, sources & limitations', el('div', {}, helper('This is the context captured when this draft was generated. Changing the compose form does not change it.'), evidenceSamples.length ? el('ul', {class: 'evidence-list'}, evidenceSamples.map(sample => el('li', {}, sample.title || 'Untitled sample'))) : helper('No confirmed authored source samples were supplied.'), (ui.draft.warnings || []).map(helper)))));
   } else output.append(el('div', { class: 'draft-empty' }, icon('feather'), el('h3', {}, 'Write first. Teach as you go.'), el('p', {}, 'Describe a real message on the left. Edit the result naturally. You can ask it to remember a useful correction when one appears.')), el('div', {class: 'evidence'}, helper(`${plural(activeLanguageLessons().length, 'active language lesson')} · ${plural(state.feedback.length, 'saved choice')} · samples optional`)));
@@ -886,31 +1143,63 @@ function correctionsHistoryPanel() {
     const statuses = {active: 'In use', undone: 'Undone', inactive: 'Lesson disabled', lesson_changed: 'Lesson edited separately', lesson_deleted: 'Lesson deleted'};
     const span = changedSpan(correction.original_text, correction.revised_text);
     const row = el('article', {class: 'remembered-correction'}, el('div', {class: 'review-top'}, el('h3', {}, correction.guidance), badge(statuses[correction.status] || correction.status, isActive ? '' : 'muted')), helper(correctionScopeSummary(correction.context, correction.scope)), details('Review the saved correction', el('div', {}, el('div', {class: 'correction-compare'}, el('div', {}, el('div', {class: 'field-label'}, 'Before'), el('div', {class: 'correction-text before'}, span.before || '(nothing)')), el('div', {}, el('div', {class: 'field-label'}, 'After'), el('div', {class: 'correction-text after'}, span.after || '(removed)'))), details('Full original and revised drafts', el('div', {}, el('h3', {}, 'Original'), el('pre', {class: 'provenance-text'}, correction.original_text), el('h3', {}, 'Revised'), el('pre', {class: 'provenance-text'}, correction.revised_text))))));
-    if (isActive) row.append(el('div', {class: 'button-group', style: 'margin-top: 12px'}, undoCorrectionButton(correction), button('Check on a new message', () => launchCorrectionCheck(correction), 'small quiet', 'arrow')));
+    if (isActive) row.append(el('div', {class: 'button-group', style: 'margin-top: 12px'}, undoCorrectionButton(correction), button('Learn from this correction', () => teachPreference({source_kind:'correction',source_id:correction.id,context:correction.context}), 'small'), correction.kind === 'style' && button('Learn identity from this correction', () => teachIdentity({kind:'correction',source_id:correction.id,context:correction.context}), 'small'), button('Check on a new message', () => launchCorrectionCheck(correction), 'small quiet', 'arrow')));
     else if (correction.status === 'lesson_changed') row.append(helper('The lesson was edited separately. Review it in Voice profile; undo will not overwrite those changes.'));
     list.append(row);
   }
   return el('section', {class: 'panel correction-history'}, panelHeading('What you’ve asked it to remember', 'Review or undo saved corrections here. Your draft edits are separate.', badge(`${corrections.filter(item => item.status === 'active').length} in use`, 'muted')), list);
+}
+function teachIdentity(seed) {
+  seedIdentitySource(seed);
+  navigate('profile');
+  requestAnimationFrame(() => document.querySelector('#identity-layer')?.scrollIntoView({block:'start'}));
+}
+function teachDocumentIdentity() {
+  const before = ui.document.result?.text || ui.document.checkedSource || ui.document.source;
+  const after = ui.document.text;
+  if (!before || before === after) {toast('Make a specific edit first.', true); return;}
+  const span = changedSpan(before, after);
+  const original = before.slice(Math.max(0,span.beforeStart-200),span.beforeEnd+200);
+  const revised = after.slice(Math.max(0,span.afterStart-200),span.afterEnd+200);
+  if (original.length > 12000 || revised.length > 12000) {toast('Choose a smaller edit for identity learning, up to 12,000 characters per side.',true); return;}
+  teachIdentity({kind:'edit',before_text:original,after_text:revised,context:ui.document.result?.context_report?.context || ui.document.context});
+}
+function teachPreference(seed) {
+  seedPreferenceEvidence(seed);
+  navigate('profile');
+  requestAnimationFrame(() => document.querySelector('#preference-learner')?.scrollIntoView({block:'start'}));
+}
+function teachDocumentPreference() {
+  const before = ui.document.result?.text || ui.document.checkedSource || ui.document.source;
+  const after = ui.document.text;
+  if (!before || before === after) { toast('Edit a passage first, then choose the specific aspect to learn.', true); return; }
+  const span = changedSpan(before, after);
+  const original = before.slice(Math.max(0,span.beforeStart-200),span.beforeEnd+200);
+  const revised = after.slice(Math.max(0,span.afterStart-200),span.afterEnd+200);
+  if (original.length > 30000 || revised.length > 30000) { toast('Choose a smaller edit. Preference evidence accepts up to 30,000 characters per side.', true); return; }
+  teachPreference({source_kind:'edit',before_text:original,after_text:revised,context:ui.document.result?.context_report?.context || ui.document.context});
 }
 function renderProfile() {
   const profile = state.profile || {};
   const confirmed = state.samples.filter(sample => sample.status === 'confirmed');
   const eligible = confirmed.filter(sample => !sample.held_out);
   const contexts = profile.contexts || [];
-  const preferences = profile.preferences || [];
+  const preferences = state.feedback || profile.preferences || [];
   const patterns = profile.patterns || [];
   const lessonContexts = profile.language_contexts || [];
   const coverageMap = new Map();
   for (const item of contexts) coverageMap.set(item.channel, {samples: item.count, lessons: 0});
   for (const item of lessonContexts) { const row = coverageMap.get(item.channel) || {samples: 0, lessons: 0}; row.lessons = item.count; coverageMap.set(item.channel, row); }
-  const stats = el('div', { class: 'panel stats-strip' }, [[activeLanguageLessons().length, 'Active language lessons'], [state.feedback.length, 'Saved choices'], [eligible.length, 'Optional authored samples'], [coverageMap.size, 'Contexts with lessons or samples']].map(([value, label]) => el('div', { class: 'stat-cell' }, el('strong', {}, value), el('span', {}, label))));
+  const learned = (state.preference_traits || []).filter(item => item.enabled && item.estimate.applies);
+  for (const item of learned) {const row = coverageMap.get(item.context.channel) || {samples:0,lessons:0,learned:0}; row.learned = (row.learned || 0) + 1; coverageMap.set(item.context.channel,row);}
+  const stats = el('div', { class: 'panel stats-strip' }, [[activeLanguageLessons().length, 'Active language lessons'], [learned.length, 'Applicable learned preferences'], [eligible.length, 'Optional authored samples'], [coverageMap.size, 'Contexts with guidance']].map(([value, label]) => el('div', { class: 'stat-cell' }, el('strong', {}, value), el('span', {}, label))));
   const patternBody = patterns.length ? el('div', { class: 'patterns' }, patterns.map(pattern => el('div', { class: 'pattern' }, el('div', {}, el('strong', {}, pattern.name), el('p', {}, asText(pattern.value))), badge(`${pattern.evidence_count || 0} sources`, 'muted')))) : empty('Authored samples are optional.', 'Your direct lessons and choices can guide writing now. Add confirmed samples if you want observed writing patterns here, too.', button('Add your writing', () => navigate('samples'), 'small', 'plus'), 'profile');
   const patternPanel = el('section', { class: 'panel' }, panelHeading('Observed writing patterns', `${profile.patterns_scope || 'Descriptive signals from confirmed writing.'} ${confirmed.length - eligible.length} held-out samples excluded.`), el('div', { class: 'panel-body' }, patternBody));
-  const preferenceBody = preferences.length ? preferences.slice().reverse().map(preference => el('article', { class: 'preference' }, contextPills(typeof preference.context === 'object' ? preference.context : { channel: preference.context || 'work' }), preference.focus && el('div', {style: 'margin-top: 8px'}, badge(`${practiceFocuses[preference.focus]?.label || preference.focus} practice`, 'muted')), preference.notes && el('p', {}, preference.notes), Object.keys(preference.presentation || {}).length > 0 && el('dl', {}, Object.entries(preference.presentation).map(([key, value]) => el('div', {}, el('dt', {}, (presentationOptions[key]?.[0] || key) + ':'), el('dd', {}, asText(value))))), preference.edited_text && details('Your feedback rewrite', el('p', { style: 'white-space: pre-wrap' }, preference.edited_text)), !preference.notes && !Object.keys(preference.presentation || {}).length && !preference.edited_text && el('p', {}, preference.choice === 'neither' ? 'Rejected both alternatives for this context.' : `Preferred option ${asText(preference.choice).toUpperCase()} for this context.`))) : empty('Tell it what feels right.', 'A preferred phrase, an unwanted sign-off, or a choice of bullets over prose all give your profile useful direction.', button('Start a practice round', () => navigate('practice'), 'small', 'arrow'), 'practice');
+  const preferenceBody = preferences.length ? preferences.slice().reverse().map(preference => el('article', { class: 'preference' }, contextPills(typeof preference.context === 'object' ? preference.context : { channel: preference.context || 'work' }), preference.focus && el('div', {style: 'margin-top: 8px'}, badge(`${practiceFocuses[preference.focus]?.label || preference.focus} practice`, 'muted')), preference.notes && el('p', {}, preference.notes), Object.keys(preference.presentation || {}).length > 0 && el('dl', {}, Object.entries(preference.presentation).map(([key, value]) => el('div', {}, el('dt', {}, (presentationOptions[key]?.[0] || key) + ':'), el('dd', {}, asText(value))))), canTeachPractice(preference) && button('Teach the aspect I preferred', () => teachPreference({source_kind:'practice',source_id:preference.id,context:preference.context}), 'small'), canTeachPractice(preference) && button('Learn identity from this feedback', () => teachIdentity({kind:'practice',source_id:preference.id,context:preference.context}), 'small'), preference.edited_text && details('Your feedback rewrite', el('p', { style: 'white-space: pre-wrap' }, preference.edited_text)), !preference.notes && !Object.keys(preference.presentation || {}).length && !preference.edited_text && el('p', {}, preference.choice === 'neither' ? 'Rejected both alternatives for this context.' : `Preferred option ${asText(preference.choice).toUpperCase()} for this context.`))) : empty('Tell it what feels right.', 'A preferred phrase, an unwanted sign-off, or a choice of bullets over prose all give your profile useful direction.', button('Start a practice round', () => navigate('practice'), 'small', 'arrow'), 'practice');
   const preferencePanel = el('section', { class: 'panel' }, panelHeading('Preferences, in context', 'Your choices and reasons, kept separate from authored evidence.'), el('div', { class: 'panel-body' }, preferenceBody));
-  const coverage = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Context coverage'), coverageMap.size ? [...coverageMap].map(([channel, counts]) => el('div', { class: 'coverage-row' }, el('strong', {}, channel || 'work'), el('span', {}, `${plural(counts.lessons, 'lesson')} · ${plural(counts.samples, 'sample')}`))) : helper('Teach a language preference in any context to start. Work, personal, community, and labels you create stay distinct.'));
+  const coverage = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Context coverage'), coverageMap.size ? [...coverageMap].map(([channel, counts]) => el('div', { class: 'coverage-row' }, el('strong', {}, channel || 'work'), el('span', {}, `${plural(counts.lessons, 'lesson')} · ${plural(counts.learned || 0, 'learned preference')} · ${plural(counts.samples, 'sample')}`))) : helper('Teach a language preference in any context to start. Work, personal, community, and labels you create stay distinct.'));
   const provider = el('section', { class: 'panel panel-pad' }, el('div', { class: 'section-title' }, 'Generation provider'), providerPill(), el('p', { class: 'export-note' }, isLive() ? `Using ${{anthropic: 'the Anthropic API', claude: 'Claude through your Claude Code login', codex: 'your local Codex CLI'}[state.settings.provider]}${state.settings.model ? ` with ${state.settings.model}` : ''}. Selected evidence and your brief are sent to the configured model when you generate.` : 'Offline mode rehearses the workflow with deterministic rules. No language model is running. The README explains how to start with the Claude, Codex or Anthropic provider.'), helper(state.settings.provider === 'claude' ? (state.capabilities?.provider_available ? 'Claude Code CLI detected. It runs with your login in safe mode, with no tools, memory or plugins. Sign-in is verified only when generation succeeds.' : 'The Claude Code CLI was not found by the server.') : state.settings.provider === 'anthropic' ? (state.capabilities?.provider_available ? 'An API key is present in the server environment. It is never shown here; access is verified only when generation succeeds.' : 'ANTHROPIC_API_KEY is not set for the server process.') : state.capabilities?.codex_available ? 'Codex CLI detected. Authentication is verified only when generation succeeds.' : 'Codex CLI availability has not been confirmed by the server.'));
-  return [pageHeading('Voice profile / evidence, not a score', 'A voice that keeps its context.', 'See what you’ve contributed, what you’ve explicitly preferred, and where there is more to learn.'), stats, el('div', { class: 'layout confidence-layout' }, confidencePanel(), el('div', { class: 'primary-column' }, proposalPanel(), languageLessonPanel(), preferencePanel, patternPanel, priorPanel()), el('aside', { class: 'aside-column' }, exportPanel(), storyEnginePanel(), coverage, provider, el('div', { class: 'aside-note' }, el('h3', {}, 'A profile, not a personality verdict.'), el('p', {}, 'This is a portable collection of evidence and preferences. Coverage grows with your contributions; a completion or XP count never establishes writing accuracy.'))))];
+  return [pageHeading('Voice profile / evidence, not a score', 'A voice that keeps its context.', 'See what you’ve contributed, what you’ve explicitly preferred, and where there is more to learn.'), stats, el('div', { class: 'layout confidence-layout' }, confidencePanel(), el('div', { class: 'primary-column' }, renderIdentityProfiles({state,api,refresh,toast,contextEditor}), renderPreferenceLearner({state,api,refresh,toast,contextEditor}), proposalPanel(), languageLessonPanel(), preferencePanel, patternPanel, priorPanel()), el('aside', { class: 'aside-column' }, exportPanel(), storyEnginePanel(), coverage, provider, el('div', { class: 'aside-note' }, el('h3', {}, 'A profile, not a personality verdict.'), el('p', {}, 'This is a portable collection of evidence and preferences. Coverage grows with your contributions; a completion or XP count never establishes writing accuracy.'))))];
 }
 function proposalPanel() {
   const proposals = state.lesson_proposals || [];
@@ -962,7 +1251,7 @@ function storyEnginePanel() {
     const box = input({ type: 'checkbox', checked: ui.storyChannels.includes(item.channel), onChange: event => {
       ui.storyChannels = event.target.checked ? [...new Set([...ui.storyChannels, item.channel])] : ui.storyChannels.filter(key => key !== item.channel); reset();
     } });
-    const counts = [item.lessons && `${item.lessons} lesson${item.lessons === 1 ? '' : 's'}`, item.feedback && `${item.feedback} practice`, item.samples && `${item.samples} sample${item.samples === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+    const counts = [item.lessons && `${item.lessons} lesson${item.lessons === 1 ? '' : 's'}`, item.feedback && `${item.feedback} practice`, item.preferences && `${item.preferences} learned preference${item.preferences === 1 ? '' : 's'}`, item.samples && `${item.samples} sample${item.samples === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
     const why = ['spoken story', 'written story'].includes(item.channel) ? ' (taught while telling stories)' : ' (saved as broad long-form)';
     return el('label', { class: 'checkbox' }, box, el('span', {}, el('strong', {}, item.label), ` — ${counts}${item.suggested ? why : ''}`));
   })) : helper('No lessons, practice notes, or confirmed samples yet. Teach a lesson or remember a correction first.');
@@ -982,7 +1271,7 @@ function storyEnginePanel() {
   const render = voice => {
     const p = voice.provenance;
     preview.replaceChildren(
-      el('p', { class: 'export-note' }, `${p.counts.traits} traits · ${p.counts.avoid} avoid · ${p.counts.examples_included} authored excerpt${p.counts.examples_included === 1 ? '' : 's'} · ${p.counts.facts_included || 0} fact${p.counts.facts_included === 1 ? '' : 's'} · from ${p.counts.lessons_used} lessons and ${p.counts.feedback_used} practice notes`),
+      el('p', { class: 'export-note' }, `${p.counts.traits} traits · ${p.counts.avoid} avoid · ${p.counts.examples_included} authored excerpt${p.counts.examples_included === 1 ? '' : 's'} · ${p.counts.facts_included || 0} fact${p.counts.facts_included === 1 ? '' : 's'} · from ${p.counts.lessons_used} lessons, ${p.counts.feedback_used} practice notes and ${p.counts.preferences_used || 0} learned preferences`),
       ...p.warnings.map(text => el('div', { class: 'callout warning', style: 'margin: 8px 0' }, text)),
       details('Story Engine voice preview', el('pre', { class: 'export-preview' }, JSON.stringify(voice, null, 2)), true));
   };
@@ -1085,6 +1374,7 @@ function qualityCheckPanel(item, nested = false) {
   if (rated) {
     const result = {updated: 'Preferred with this correction', previous: 'Preferred without this correction', tie: 'Both fit equally', neither: 'Neither fit'}[item.result] || item.result;
     body.append(el('p', {class: 'quality-result'}, result), item.notes && helper(item.notes), correction?.status === 'active' && undoCorrectionButton(correction, 'Undo this correction'));
+    if (canTeachComparison(item, 'quality')) body.append(button('Teach the aspect I preferred', () => teachPreference({source_kind:'quality',source_id:item.id,context:item.context}), 'small'), button('Learn identity from this comparison', () => teachIdentity({kind:'quality',source_id:item.id,context:item.context}), 'small'));
     return el('article', {class: nested ? 'rated-quality-check' : 'panel'}, body);
   }
   const alternatives = el('div', {class: 'button-group', role: 'group', 'aria-label': 'Overall preference'});
@@ -1124,7 +1414,7 @@ function renderWholeVoiceEvaluation() {
     cases.append(el('section',{class:'panel'},panelHeading('Which would you send with fewer changes?',item.brief,badge(isLive(item.provider)?'Blind comparison':'Rehearsal','muted')),el('div',{class:'panel-body'},contextPills(item.context),options,alternate,field('Optional evaluation note',notes),el('label',{class:'checkbox'},factual,el('span',{},'One or both drafts change facts or commitments.'))),el('div',{class:'panel-foot'},helper('Names are revealed after your judgment is recorded.'),save)));
   }
   const history=(state.evaluations||[]).filter(x=>x.status!=='unrated');
-  const results=el('section',{class:'panel panel-pad'},el('h2',{},'Your observed results'),helper(`${summary.rated_real||0} rated AI comparisons · ${summary.calibrated_wins||0} calibrated wins · ${summary.baseline_wins||0} baseline wins · ${summary.ties||0} ties · ${summary.neither||0} neither`),helper(`${summary.factual_flags||0} factual concerns · ${summary.rated_offline||0} rated rehearsals excluded from AI results`),helper('These are your judgments on these tasks, not a universal accuracy percentage.'),history.slice(0,8).map(x=>el('article',{class:'preference'},contextPills(x.context),el('p',{},`${isLive(x.provider)?'AI':'Rehearsal'} · ${x.result} · A: ${x.mapping?.a} / B: ${x.mapping?.b}`),x.notes&&helper(x.notes))));
+  const results=el('section',{class:'panel panel-pad'},el('h2',{},'Your observed results'),helper(`${summary.rated_real||0} rated AI comparisons · ${summary.calibrated_wins||0} calibrated wins · ${summary.baseline_wins||0} baseline wins · ${summary.ties||0} ties · ${summary.neither||0} neither`),helper(`${summary.factual_flags||0} factual concerns · ${summary.rated_offline||0} rated rehearsals excluded from AI results`),helper('These are your judgments on these tasks, not a universal accuracy percentage.'),history.slice(0,8).map(x=>el('article',{class:'preference'},contextPills(x.context),el('p',{},`${isLive(x.provider)?'AI':'Rehearsal'} · ${x.result} · A: ${x.mapping?.a} / B: ${x.mapping?.b}`),x.notes&&helper(x.notes),canTeachComparison(x,'evaluation')&&button('Teach the aspect I preferred',()=>teachPreference({source_kind:'evaluation',source_id:x.id,context:x.context}),'small'),canTeachComparison(x,'evaluation')&&button('Learn identity from this comparison',()=>teachIdentity({kind:'evaluation',source_id:x.id,context:x.context}),'small'))));
   return [pageHeading('Evaluation / fewer edits, better fit','Check whether it sounds more like you.','Judge comparable drafts blind, then inspect what helped.'),el('div',{class:'primary-column'},cases,setup,results)];
 }
 

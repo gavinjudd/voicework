@@ -1,4 +1,12 @@
-# Verification — 2026-10-13
+# Verification
+
+## Open-source snapshot — 2026-10-18
+
+- All **564 Python tests** passed on both Python 3.9 and 3.14. All **51 JavaScript tests** passed. Python compilation, JavaScript syntax checks and `git diff --check` also passed in a separate release checkout.
+- A new empty profile served the UI and completed a synthetic whole-document offline run through the HTTP harness. It preserved the source exactly and reported semantic review as **not checked**. No personal database was copied into the release checkout.
+- Regression tests cover the identity intake and approval boundary, contextual preference learning, exclusion of held-out and assisted writing, authored-sample selection reasons, individual edit assessment across multiple batches, mixed passages, optional suggestions versus preference violations, separate evidence coverage, register versus perspective, and article-scoped keep/wording instructions during generation and review.
+- Before publication, all 17 reachable commits and 203 blobs plus the current source snapshot were scanned for credential patterns, private local paths, database/export filenames, and overlap with private writing samples. No matches were found. The final release files are checked separately. These bounded checks reduce publication risk; they are not a complete security audit.
+- This checkpoint does not establish a general voice-accuracy percentage, factual correctness, or human acceptance of generated writing. Model providers and access depend on the user's own account. Earlier observations below retain their original dates, counts and limitations.
 
 ## Story Engine voice upgrade — 2026-10-15
 
@@ -78,7 +86,7 @@
 - Context suggestions are provisional heuristics or optional model suggestions, not verified reconstruction of an original conversation or proof of authorship.
 - Model-weight fine-tuning, automated prompt optimization, source-family holdout grouping, and independent factuality verification are not implemented. Whole-document source-relative content and voice diagnostics are implemented; they do not verify the source itself. The implemented learning is contextual retrieval and saved preference feedback.
 - No real personal corpus is included in the shipped repository. Automated generation QA uses synthetic data in a separate scratch directory. Private local intake is separate from source control; the confidence rollout preserved all existing sample records, verified by a before/after normalized-record hash, and did not generate drafts or send samples to a model.
-- Source is published to the private repository [gavinjudd/voicework](https://github.com/gavinjudd/voicework). No hosted deployment, public release, or extension installation was created.
+- At the original MVP checkpoint, source was in the private [gavinjudd/voicework repository](https://github.com/gavinjudd/voicework); no hosted deployment, public release or extension installation had been created at that checkpoint. Later release verification is recorded separately below.
 
 ## Handoff
 

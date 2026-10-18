@@ -5,12 +5,22 @@ compare a draft to its source; neither deterministic nor model review verifies
 the truth of the source or establishes personalized voice accuracy.
 """
 import copy
+import difflib
 import hashlib
 import json
 import math
 import re
 from collections import Counter
 from .live import LIVE_PROVIDERS
+from .document_decisions import classifier_context
+from .document_wording import (instruction_plan, batch_instructions, unmet_batch,
+                               instruction_report, attach_instruction_report)
+from .document_notices import coverage_notices, has_voice_guidance, validate_coverage_codes
+from .meaning import (NEGATION, COMMITMENT, plan_meaning_changes, validate_meaning_checks,
+                      meaning_batches, meaning_verdicts, meaning_report, consolidate_content)
+from .voice_review import (META as VOICE_META, EFFECT_META as VOICE_EFFECT_META, NOTICE as VOICE_NOTICE, references as voice_references,
+                           catalog as voice_catalog, validate_metadata as validate_voice_metadata,
+                           normalize as normalize_voice, partition as partition_voice)
 
 
 MAX_DOCUMENT_CHARS = 120000
@@ -21,14 +31,13 @@ MAX_REVIEW_BATCHES = 16
 MAX_REVIEW_CHARS = 24000
 MAX_BLOCKS = 4000
 MAX_GUIDANCE_CHARS = 100000
+MAX_SOURCE_VOICE_PHRASES = 12
 REVIEW_LIMITATION = ('Checks compare this draft with the supplied source and contextual guidance. '
                      'They do not verify source facts, prove meaning is preserved, or measure voice accuracy.')
 URL = re.compile(r'(?:https?://|mailto:|www\.)[^\s<>"\]]+', re.I)
 NUMBER = re.compile(r'(?<!\w)[+\-−]?(?:\d[\d,]*(?:\.\d+)?)(?:%|‰)?(?!\w)')
 CITATION = re.compile(r'\[(?:\^?\d[\d,;\s–\-]*|\^[\w-]+|@[^\]\n]+|[A-Z][^\]\n]{0,100}\b\d{4}[a-z]?[^\]\n]{0,30})\]')
 INLINE_CODE = re.compile(r'(`+)([^`\n]+)\1')
-NEGATION = re.compile(r"\b(?:not|no|never|neither|nor|without|cannot|hardly|unless)\b|\b\w+n[’']t\b", re.I)
-COMMITMENT = re.compile(r'\b(?:must|shall|will|may|might|could|should|guarantee|guaranteed)\b', re.I)
 
 
 def validate_document_text(value, *, output=False):
@@ -238,11 +247,12 @@ def _warnings(result):
     warnings = result.get('warnings')
     if not isinstance(warnings, list) or len(warnings) > 20 or any(not isinstance(x, str) or len(x) > 1000 for x in warnings):
         raise ValueError('The model returned invalid document warnings.')
+    validate_coverage_codes(result)
     return warnings
 
 
 def validate_batch_result(result, expected):
-    if not isinstance(result, dict) or set(result) != {'blocks', 'warnings'}:
+    if not isinstance(result, dict) or not {'blocks', 'warnings'} <= set(result) or set(result) - {'blocks', 'warnings', 'coverage_notice_codes'}:
         raise ValueError('The model returned an invalid document batch; no partial document was returned.')
     _warnings(result)
     output = result['blocks']
@@ -383,14 +393,17 @@ def _review_units(source, draft):
 
 
 def validate_review_result(result):
-    if not isinstance(result, dict) or set(result) != {'content_issues', 'voice_issues', 'warnings'}:
+    required = {'content_issues', 'voice_issues', 'warnings'}
+    if not isinstance(result, dict) or not required <= set(result) or set(result) - (required | {'voice_aspect_checks', 'meaning_checks', 'coverage_notice_codes'}):
         raise ValueError('The model returned an invalid document review.')
     _warnings(result)
     for key in ('content_issues', 'voice_issues'):
         if not isinstance(result[key], list) or len(result[key]) > 20:
             raise ValueError('The model returned an invalid document review.')
         for issue in result[key]:
-            if not isinstance(issue, dict) or set(issue) != {'severity', 'code', 'message', 'section'}:
+            fields = {'severity', 'code', 'message', 'section'}
+            extra = {'change_ids'} if key == 'content_issues' else VOICE_META | VOICE_EFFECT_META | {'source_quote', 'draft_quote'}
+            if not isinstance(issue, dict) or not fields <= set(issue) or set(issue) - (fields | extra):
                 raise ValueError('The model returned an invalid document review issue.')
             if issue['severity'] not in ('error', 'warning') or not isinstance(issue['code'], str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', issue['code']):
                 raise ValueError('The model returned an invalid document review issue.')
@@ -398,43 +411,245 @@ def validate_review_result(result):
                 raise ValueError('The model returned an invalid document review message.')
             if not isinstance(issue['section'], str) or len(issue['section']) > 100:
                 raise ValueError('The model returned an invalid document review section.')
+            if 'change_ids' in issue:
+                ids = issue['change_ids']
+                if not isinstance(ids, list) or len(ids) > 24 or any(not isinstance(ident, str) or not ident or len(ident) > 100 for ident in ids) or len(ids) != len(set(ids)):
+                    raise ValueError('The content finding returned invalid edit links.')
+            if key == 'voice_issues':
+                validate_voice_metadata(issue)
+    aspects = result.get('voice_aspect_checks', [])
+    if not isinstance(aspects, list) or len(aspects) > MAX_SOURCE_VOICE_PHRASES:
+        raise ValueError('The model returned invalid voice aspect checks.')
+    fields = {'anchor_id', 'verdict', 'source_quote', 'draft_quote', 'reason'}
+    for item in aspects:
+        if not isinstance(item, dict) or not fields <= set(item) or set(item) - (fields | VOICE_META | VOICE_EFFECT_META):
+            raise ValueError('The model returned an invalid voice aspect check.')
+        if item['verdict'] not in ('preserved', 'flattened', 'overridden', 'uncertain'):
+            raise ValueError('The model returned an invalid voice aspect verdict.')
+        for key in fields - {'verdict'}:
+            if not isinstance(item[key], str) or len(item[key]) > (100 if key == 'anchor_id' else 1000):
+                raise ValueError('The model returned an invalid voice aspect explanation.')
+        if not item['anchor_id'].strip() or not item['source_quote'].strip() or not item['reason'].strip():
+            raise ValueError('Voice aspect checks need a source quote and reason.')
+        if item['verdict'] == 'preserved' and not item['draft_quote'].strip():
+            raise ValueError('A preserved aspect needs corresponding draft wording.')
+        validate_voice_metadata(item, aspect=True)
+    validate_meaning_checks(result.get('meaning_checks', []))
     return result
 
 
-def _frozen_payload(payload, controls):
+def validate_meaning_result(result):
+    """Supplemental calls assess edits only; never repeat general findings."""
+    if not isinstance(result, dict) or set(result) != {'meaning_checks', 'warnings'}:
+        raise ValueError('The model returned an invalid supplemental edit review.')
+    _warnings(result)
+    validate_meaning_checks(result['meaning_checks'])
+    return result
+
+
+def _phrase_pattern(text):
+    return re.compile(r'(?<!\w)' + r'\s+'.join(re.escape(part) for part in text.split()) + r'(?!\w)', re.I)
+
+
+def _source_voice_phrases(source, lessons, register):
+    """Find bounded review anchors, not expressions that must be copied."""
+    blocks, _ = parse_document(source)
+    prose = [block['text'] for block in blocks if block['kind'] == 'prose']
+    candidates = {}
+    for lesson in lessons:
+        text = str(lesson.get('preferred', '')).strip()
+        words = re.findall(r"\b\w+(?:['’]\w+)*\b", text)
+        if not 2 <= len(words) <= 16 or len(text) > 120 or '\n' in text or '\r' in text:
+            continue
+        if not any(_phrase_pattern(text).search(block) for block in prose):
+            continue
+        key = ' '.join(text.casefold().split())
+        item = candidates.setdefault(key, {'text': text, 'lesson_ids': []})
+        if lesson.get('id') and lesson['id'] not in item['lesson_ids']:
+            item['lesson_ids'].append(lesson['id'])
+    items = [dict(item, id='v%d' % (index + 1)) for index, item in enumerate(candidates.values())]
+    return {'phrases': [] if register == 'formal' else items[:MAX_SOURCE_VOICE_PHRASES],
+            'omitted': max(0, len(items) - MAX_SOURCE_VOICE_PHRASES) if register != 'formal' else 0,
+            'formal_override': len(items) if register == 'formal' else 0}
+
+
+def _preferred_source_checks(source, draft, frozen):
+    source_blocks, source_sections = parse_document(source)
+    draft_blocks, draft_sections = parse_document(draft)
+    aligned = [s['heading'] for s in source_sections] == [s['heading'] for s in draft_sections]
+    def prose_map(blocks):
+        result = {}
+        for block in blocks:
+            if block['kind'] == 'prose':
+                key = block['section'] if aligned else ''
+                result[key] = result.get(key, '') + block['text']
+        return result
+    before, after = prose_map(source_blocks), prose_map(draft_blocks)
+    phrases, anchors = [], []
+    for item in frozen.get('source_voice_phrases', []):
+        pattern = _phrase_pattern(item['text'])
+        missing = []
+        for section, text in before.items():
+            if len(pattern.findall(after.get(section, ''))) < len(pattern.findall(text)):
+                missing.append(section)
+                anchors.append({'anchor_id': item['id'] + ':' + (section or 'document'),
+                    'section': section or 'document', 'text': item['text'], 'lesson_ids': item['lesson_ids']})
+        phrases.append(dict(item, status='changed' if missing else 'retained', affected_sections=missing))
+    return anchors[:MAX_SOURCE_VOICE_PHRASES], {'phrases': phrases, **frozen.get('source_voice_phrase_policy', {}),
+        'aspect_checks': [], 'aspect_checks_omitted': max(0, len(anchors) - MAX_SOURCE_VOICE_PHRASES),
+        'notice': 'Examples anchor an aspect review. Changed words alone are not a voice failure; equivalent expression is allowed. Review is diagnostic, not voice accuracy or authorship.'}
+
+
+def _aspect_requests(anchors, units, reviewed):
+    """Assign a changed example only to a review window containing its source."""
+    return [anchor for anchor in anchors if anchor['anchor_id'] not in reviewed and any(
+        unit['section'] == anchor['section'] and _phrase_pattern(anchor['text']).search(
+            unit['source_before'] + unit['source'] + unit['source_after']) for unit in units)]
+
+
+def _aspect_verdicts(result, requests, units, register):
+    """Validate attribution/quotes; do not pretend a lexical test measures style."""
+    requested = {item['anchor_id']: item for item in requests}
+    reviewed = {}
+    for check in result.get('voice_aspect_checks', []):
+        ident = check['anchor_id']
+        if ident not in requested or ident in reviewed:
+            raise ValueError('The model referenced an unknown or repeated voice anchor.')
+        anchor = requested[ident]
+        windows = [unit for unit in units if unit['section'] == anchor['section']]
+        source_quote, draft_quote = check['source_quote'].strip(), check['draft_quote'].strip()
+        if not _phrase_pattern(anchor['text']).search(source_quote) or not any(
+                source_quote in unit['source_before'] + unit['source'] + unit['source_after'] for unit in windows):
+            raise ValueError('The voice aspect source quote was not supplied.')
+        if draft_quote and not any(draft_quote in unit['draft_before'] + unit['draft'] + unit['draft_after'] for unit in windows):
+            raise ValueError('The voice aspect draft quote was not supplied.')
+        if check['verdict'] == 'overridden' and register == 'auto':
+            raise ValueError('A voice aspect cannot claim an explicit register override in auto mode.')
+        reviewed[ident] = dict(check, section=anchor['section'], lesson_ids=anchor['lesson_ids'])
+    return reviewed
+
+
+def _frozen_payload(payload, controls, source):
     if not isinstance(controls, dict):
         raise ValueError('Document controls must be an object.')
     if controls.get('register', 'auto') not in ('auto', 'casual', 'professional', 'formal'):
         raise ValueError('Document register must be auto, casual, professional, or formal.')
     if controls.get('length', 'auto') not in ('auto', 'preserve'):
         raise ValueError('Document length must be auto or preserve.')
+    if controls.get('revision', 'rewrite') not in ('rewrite', 'copyedit'):
+        raise ValueError('Document revision must be rewrite or copyedit.')
     frozen = copy.deepcopy(payload)
     frozen['controls'] = copy.deepcopy(controls)
+    frozen['controls'].setdefault('revision', 'rewrite')
+    selected = _source_voice_phrases(source, frozen.get('language_lessons', []), controls.get('register', 'auto'))
+    frozen['source_voice_phrases'] = selected.pop('phrases')
+    frozen['source_voice_phrase_policy'] = selected
     encoded = json.dumps(frozen, ensure_ascii=False, sort_keys=True)
     if len(encoded) > MAX_GUIDANCE_CHARS:
         raise ValueError('Applicable writing guidance exceeds the document limit; reduce the selected guidance.')
     return frozen
 
 
-def review_document(provider, source, draft, frozen):
+def revision_summary(source, draft, mode='rewrite'):
+    """Describe wording changes without scoring voice or rewarding edit volume."""
+    words = lambda value: re.findall(r"\b\w+(?:['’]\w+)*\b", value.casefold())
+    before, after = words(source), words(draft)
+    retained = sum(block.size for block in difflib.SequenceMatcher(None, before, after).get_matching_blocks())
+    return {'mode': mode, 'source_words': len(before), 'draft_words': len(after),
+            'retained_source_words': retained,
+            'notice': 'Wording overlap describes edits, not voice accuracy. More changes are not automatically better.'}
+
+
+def review_document(provider, source, draft, frozen, document_decisions=None, document_wording=None):
     validate_document_text(source)
     validate_document_text(draft, output=True)
-    issues = deterministic_checks(source, draft, frozen.get('controls', {}).get('length', 'auto'))
-    voice_issues, warnings = [], []
-    has_voice = any(frozen.get(key) for key in ('authored_examples', 'calibration_feedback', 'language_lessons', 'assistant_derived_priors'))
-    review = {'provider': provider.mode, 'status': 'not_checked', 'units_total': 0, 'units_completed': 0}
+    deterministic = deterministic_checks(source, draft, frozen.get('controls', {}).get('length', 'auto'))
+    issues = []
+    try:
+        batches = _review_units(source, draft)
+        meaning_plans, meaning_omitted = plan_meaning_changes(batches)
+        edit_batches = [meaning_batches(plan) or [[]] for plan in meaning_plans]
+    except ValueError:
+        batches, meaning_plans, meaning_omitted, edit_batches = [], [], {}, []
+    assessed_meaning = {}
+    anchors, phrase_report = _preferred_source_checks(source, draft, frozen)
+    voice_issues, aspect_verdicts = [], {}
+    voice_refs = voice_references(frozen)
+    warnings = []
+    keep_context = []
+    wording_context = []
+    keep_context_ready = False
+    if phrase_report.get('omitted'):
+        warnings.append('Only the first twelve matching short preferred expressions were checked; review the remaining supplied preferences.')
+    if phrase_report['aspect_checks_omitted']:
+        warnings.append('Changed wording exceeded the twelve voice aspect review anchors; review the remaining examples in context.')
+    has_voice = has_voice_guidance(frozen)
+    notices = coverage_notices(frozen)
+    review = {'provider': provider.mode, 'status': 'not_checked', 'units_total': len(batches), 'units_completed': 0,
+              'edit_batches_total': sum(bool(group) for groups in edit_batches for group in groups),
+              'edit_batches_completed': 0, 'calls_total': sum(len(groups) for groups in edit_batches), 'calls_completed': 0}
     if provider.mode in LIVE_PROVIDERS:
         try:
-            batches = _review_units(source, draft)
+            if not batches:
+                raise ValueError('The complete review could not be planned.')
+            keep_context = classifier_context(document_decisions, source, draft, frozen.get('context', {}), frozen['controls'])
+            wording_plan = instruction_plan(source, frozen.get('context', {}), frozen['controls'],
+                                            parse_document(source)[0], corrections=document_wording)
+            wording_context = batch_instructions(wording_plan, parse_document(source)[0])
+            for index, item in enumerate(wording_context):
+                ident = 'article_wording:' + item['instruction_id']
+                voice_refs[ident] = {'id': ident, 'origin': 'article_wording', 'can_establish_conflict': True,
+                                    'path': 'article_wording_choices[%d]' % index,
+                                    'guidance': 'Use this exact wording for this source passage: ' + item['required_text']}
+            keep_context_ready = True
+            # A scoped style choice must never condition an individual meaning
+            # verdict. With choices present, assess every edit separately in
+            # content-only calls that do not receive those choices.
+            independent_meaning = bool(keep_context or wording_context)
+            if independent_meaning:
+                review['calls_total'] = len(batches) + review['edit_batches_total']
             review['units_total'] = len(batches)
             for index, units in enumerate(batches):
-                result = validate_review_result(provider._invoke('document_review', dict(copy.deepcopy(frozen), units=units, review_batch=index + 1, review_batches=len(batches))))
+                requested = _aspect_requests(anchors, units, aspect_verdicts)
+                primary_meaning = [] if independent_meaning else edit_batches[index][0]
+                result = validate_review_result(provider._invoke('document_review', dict(copy.deepcopy(frozen), units=units,
+                    article_keep_decisions=copy.deepcopy(keep_context),
+                    article_wording_choices=copy.deepcopy(wording_context),
+                    coverage_notice_catalog=notices,
+                    voice_aspect_requests=requested, meaning_change_requests=primary_meaning,
+                    meaning_change_catalog=[{key: item[key] for key in ('change_id', 'section', 'unit_index', 'source_range', 'draft_range')}
+                                            for item in meaning_plans[index]],
+                    voice_reference_catalog=voice_catalog(voice_refs),
+                    review_batch=index + 1, review_batches=len(batches))))
+                validate_coverage_codes(result, frozen)
                 allowed_sections = {unit['section'] for unit in units} | {''}
                 if any(issue['section'] not in allowed_sections for key in ('content_issues', 'voice_issues') for issue in result[key]):
                     raise ValueError('The model referenced a section outside this document review batch.')
+                current_aspects = _aspect_verdicts(result, requested, units, frozen['controls'].get('register', 'auto'))
+                for aspect in current_aspects.values():
+                    if any(ident not in voice_refs for ident in aspect.get('preference_ids', [])):
+                        raise ValueError('The model referenced an unknown voice aspect preference.')
+                    if aspect.get('classification') == 'preference_violation' and not set(aspect.get('preference_ids', [])) & set(aspect['lesson_ids']):
+                        aspect.update(classification='uncertain', basis='No applicable anchor lesson was cited to establish this conflict.')
+                normalized_voice = [normalize_voice(item, voice_refs, units) for item in result['voice_issues']]
+                aspect_verdicts.update(current_aspects)
+                assessed_meaning.update(meaning_verdicts(result, primary_meaning, issue_requests=meaning_plans[index]))
                 issues.extend(result['content_issues'])
-                voice_issues.extend(result['voice_issues'])
+                voice_issues.extend(normalized_voice)
                 warnings.extend(result['warnings'])
+                review['calls_completed'] += 1
+                review['edit_batches_completed'] += bool(primary_meaning)
+                extra_groups = edit_batches[index] if independent_meaning else edit_batches[index][1:]
+                for group_index, group in enumerate(extra_groups, 1 if independent_meaning else 2):
+                    if not group:
+                        continue
+                    extra = validate_meaning_result(provider._invoke('document_meaning', dict(copy.deepcopy(frozen), units=units,
+                        meaning_change_requests=group, meaning_batch=group_index, meaning_batches=len(edit_batches[index]),
+                        review_batch=index + 1, review_batches=len(batches))))
+                    assessed_meaning.update(meaning_verdicts(extra, group))
+                    warnings.extend(extra['warnings'])
+                    review['calls_completed'] += 1
+                    review['edit_batches_completed'] += 1
                 review['units_completed'] += 1
             review['status'] = 'checked'
         except ValueError:
@@ -445,27 +660,148 @@ def review_document(provider, source, draft, frozen):
     else:
         warnings.append('Offline rehearsal: semantic content review and personalized voice review are unavailable.')
     semantic_complete = review['status'] == 'checked'
-    if not has_voice:
-        voice_issues.append(_issue('no_voice_evidence', 'No applicable authored examples or explicit voice guidance were supplied; personalized voice fit is not checked.'))
-    content_status = 'review_required' if issues or (semantic_complete and warnings) else ('checked' if semantic_complete else 'not_checked')
-    voice_status = 'not_checked' if not semantic_complete or not has_voice else ('review_required' if voice_issues or warnings else 'checked')
-    return {'status': 'checked' if content_status == voice_status == 'checked' else 'review_required',
-            'content': {'status': content_status, 'issues': issues, 'deterministic': 'checked', 'semantic': review['status']},
-            'voice': {'status': voice_status, 'issues': voice_issues, 'guidance_available': has_voice},
+    wording_report = meaning_report(
+        meaning_plans, meaning_omitted, assessed_meaning, semantic_complete)
+    issues, content_signals = consolidate_content(deterministic, issues, wording_report, NUMBER, batches)
+    for anchor in anchors:
+        check = aspect_verdicts.get(anchor['anchor_id'])
+        if check is None:
+            check = {'anchor_id': anchor['anchor_id'], 'section': anchor['section'], 'lesson_ids': anchor['lesson_ids'],
+                'verdict': 'uncertain', 'source_quote': anchor['text'], 'draft_quote': '',
+                'reason': 'The changed example did not receive a valid aspect review. Changed words alone do not establish flattening.'}
+        phrase_report['aspect_checks'].append(check)
+        if check['verdict'] == 'flattened':
+            finding = _issue('source_voice_flattened', check['reason'], section=check['section'])
+            finding.update({key: check[key] for key in VOICE_META | VOICE_EFFECT_META if key in check})
+            finding.update(source_quote=check['source_quote'], draft_quote=check['draft_quote'])
+            voice_issues.append(normalize_voice(finding, voice_refs, [unit for batch in batches for unit in batch]))
+        elif check['verdict'] == 'uncertain':
+            voice_issues.append(dict(_issue('source_voice_aspect_unreviewed', check['reason'], section=check['section']),
+                                     classification='uncertain', label='Preference assessment uncertain'))
+    voice_issues, voice_suggestions = partition_voice(voice_issues)
+    content_status = 'review_required' if issues else ('checked' if semantic_complete else 'not_checked')
+    voice_status = 'not_checked' if not semantic_complete or not has_voice else ('review_required' if voice_issues else 'checked')
+    status = ('review_required' if issues or voice_issues or warnings else
+              'checked' if content_status == voice_status == 'checked' else 'not_checked')
+    return {'status': status,
+            'content': {'status': content_status, 'issues': issues, 'signals': content_signals,
+                        'deterministic': 'checked', 'semantic': review['status']},
+            'voice': {'status': voice_status, 'issues': voice_issues, 'suggestions': voice_suggestions,
+                      'guidance_available': has_voice, 'notice': VOICE_NOTICE},
             'source_hash': fingerprint(source), 'draft_hash': fingerprint(draft),
-            'guidance_hash': fingerprint(frozen), 'review': review,
-            'warnings': list(dict.fromkeys(warnings)), 'limitation': REVIEW_LIMITATION}
+            'guidance_hash': fingerprint(frozen), 'review': review, 'source_voice_phrases': phrase_report,
+            'document_decision_review': {
+                'status': review['status'] if keep_context_ready else 'not_checked',
+                'context_hash': fingerprint(keep_context) if keep_context_ready else None,
+                'choices': [{'decision_id': item['decision_id'], 'scope': item['scope']} for item in keep_context],
+                'notice': 'These article choices were supplied for voice classification only. Changed passages are historical context, not approval. Meaning and independent preference checks remain active.'},
+            'article_wording_review': {'status': review['status'] if keep_context_ready else 'not_checked',
+                'instruction_ids': [item['instruction_id'] for item in wording_context],
+                'context_hash': fingerprint(wording_context) if keep_context_ready else None},
+            'meaning_changes': wording_report,
+            'warnings': list(dict.fromkeys(warnings)), 'coverage_notices': notices, 'limitation': REVIEW_LIMITATION}
 
 
-def check_document(provider, context, source, draft, controls, payload):
-    return review_document(provider, source, draft, _frozen_payload(payload, controls))
+def check_document(provider, context, source, draft, controls, payload, document_decisions=None, document_wording=None):
+    frozen = _frozen_payload(payload, controls, source)
+    checks = review_document(provider, source, draft, frozen, document_decisions=document_decisions, document_wording=document_wording)
+    blocks = parse_document(source)[0]
+    try:
+        plan = instruction_plan(source, context, controls, blocks, document_decisions, document_wording)
+    except ValueError as exc:
+        checks['status'] = 'review_required'
+        checks['warnings'].append(str(exc))
+        checks['article_wording'] = {'status': 'not_checked', 'items': [], 'notice': str(exc)}
+        return checks
+    # A later manual rephrase of a kept optional choice remains historical,
+    # not a new literal violation. Explicit wording corrections remain exact.
+    return attach_instruction_report(checks, instruction_report(plan, blocks, parse_document(draft)[0], enforce_keep=False))
 
 
-def generate_document(provider, context, source, controls, payload, offline_warning):
+def _generate_with_wording(provider, payload, blocks, frozen, plan, attempts, stage):
+    """Ask the provider to honor exact article choices; never substitute text."""
+    instructions = batch_instructions(plan, blocks)
+    payload = dict(payload, article_wording_instructions=instructions)
+    result = provider._invoke('document', payload)
+    validate_coverage_codes(result, frozen)
+    output = validate_batch_result(result, blocks)
+    failures = unmet_batch(instructions, output)
+    if instructions:
+        attempts.append({'stage': stage, 'attempt': 1, 'instruction_ids': [x['instruction_id'] for x in instructions], 'unmet': failures})
+    if failures:
+        first = result
+        try:
+            retry = dict(copy.deepcopy(payload), current_draft_blocks=output, article_wording_feedback=failures)
+            result = provider._invoke('document', retry)
+            validate_coverage_codes(result, frozen)
+            output = validate_batch_result(result, blocks)
+            attempts.append({'stage': stage, 'attempt': 2, 'instruction_ids': [x['instruction_id'] for x in instructions],
+                             'unmet': unmet_batch(instructions, output)})
+            result['warnings'] = list(dict.fromkeys(first['warnings'] + result['warnings']))
+        except ValueError:
+            attempts.append({'stage': stage, 'attempt': 2, 'status': 'unavailable_or_invalid', 'unmet': failures})
+            result = copy.deepcopy(first)
+            result['warnings'].append('The article wording retry was unavailable or invalid. The complete earlier draft was kept for review.')
+    return result
+
+
+def _repair_voice_findings(provider, source, blocks, sections, batches, frozen, replacements, checks, document_decisions=None, document_wording=None, wording_plan=None, wording_attempts=None):
+    """One targeted voice pass; retain the complete initial draft on failure."""
+    text = ''.join(replacements.get(block['id'], block['text']) for block in blocks)
+    warnings, accepted = [], False
+    # Repair concrete voice findings once, never an overlap threshold or the
+    # absence of authored samples. Re-review the entire resulting document.
+    findings = checks['voice']['issues']
+    actionable = [issue for issue in findings if issue.get('classification') == 'preference_violation']
+    if (provider.mode in LIVE_PROVIDERS and frozen['controls']['revision'] == 'rewrite'
+            and checks['review']['status'] == 'checked' and actionable):
+        affected = {issue.get('section', '') for issue in actionable}
+        repaired = dict(replacements)
+        try:
+            for batch in batches:
+                targets = [block for block in batch if '' in affected or 'document' in affected or block['section'] in affected]
+                if not targets:
+                    continue
+                payload = dict(copy.deepcopy(frozen), blocks=copy.deepcopy(targets),
+                               coverage_notice_catalog=coverage_notices(frozen),
+                               current_draft_blocks=[{'id': block['id'], 'text': replacements[block['id']]} for block in targets],
+                               revision_feedback={'voice_issues': actionable},
+                               section_context=[{'id': section['id'], 'heading_excerpt': _excerpt(section['heading'], 300)}
+                                                for section in sections if section['id'] in {block['section'] for block in targets}])
+                result = _generate_with_wording(provider, payload, targets, frozen, wording_plan, wording_attempts, 'voice_revision')
+                for item, original in zip(validate_batch_result(result, targets), targets):
+                    leading = re.match(r'^\s*', original['text']).group(0)
+                    trailing = re.search(r'\s*$', original['text']).group(0)
+                    repaired[item['id']] = leading + item['text'].strip() + trailing
+                warnings.extend(result['warnings'])
+            revised = ''.join(repaired.get(block['id'], block['text']) for block in blocks)
+            validate_document_text(revised, output=True)
+            compliance = instruction_report(wording_plan, blocks, parse_document(revised)[0], repaired)
+            if compliance['status'] != 'checked':
+                raise ValueError('The targeted revision did not retain article wording instructions')
+            revised_checks = review_document(provider, source, revised, frozen, document_decisions=document_decisions, document_wording=document_wording)
+            original_content = {fingerprint(issue) for issue in checks['content']['issues']}
+            new_content = {fingerprint(issue) for issue in revised_checks['content']['issues']}
+            if revised_checks['review']['status'] != 'checked' or new_content - original_content:
+                raise ValueError('The targeted revision was not fully reviewed')
+            if any(issue.get('classification') in ('preference_violation', 'uncertain') for issue in revised_checks['voice']['issues']):
+                raise ValueError('The targeted revision has unresolved or unreviewed voice aspects')
+            text, replacements, checks = revised, repaired, revised_checks
+            accepted = True
+        except ValueError:
+            warnings.append('The targeted voice revision was not accepted. The initial complete draft and its findings were kept.')
+    return text, replacements, checks, warnings, accepted
+
+
+def generate_document(provider, context, source, controls, payload, offline_warning, document_decisions=None, document_wording=None):
     validate_document_text(source)
-    frozen = _frozen_payload(payload, controls)
+    frozen = _frozen_payload(payload, controls, source)
     blocks, sections = parse_document(source)
     batches = generation_batches(blocks)
+    # Batching may split prose and renumber blocks; bind instructions only to
+    # the final generation targets, not the parser's earlier IDs.
+    wording_plan = instruction_plan(source, context, controls, blocks, document_decisions, document_wording)
+    wording_attempts = []
     replacements, warnings = {}, []
     if provider.mode == 'offline':
         text = source
@@ -495,10 +831,11 @@ def generate_document(provider, context, source, controls, payload, offline_warn
             section_ids = {block['section'] for block in batch}
             section_context = [{'id': section['id'], 'heading_excerpt': _excerpt(section['heading'], 300)} for section in sections if section['id'] in section_ids]
             payload = dict(copy.deepcopy(frozen), blocks=copy.deepcopy(batch), outline=outline,
+                           coverage_notice_catalog=coverage_notices(frozen),
                            outline_complete=len(outline) == len(sections), section_context=section_context,
                            adjacent_source_excerpts=adjacent, batch=index + 1, batches=len(batches),
                            previous_draft_excerpt=_excerpt(''.join(replacements.get(block['id'], block['text']) for block in before_blocks)))
-            result = provider._invoke('document', payload)
+            result = _generate_with_wording(provider, payload, batch, frozen, wording_plan, wording_attempts, 'initial')
             output = validate_batch_result(result, batch)
             for item, original in zip(output, batch):
                 # Separators belong to the source, including CRLF. Avoid a
@@ -509,9 +846,18 @@ def generate_document(provider, context, source, controls, payload, offline_warn
             warnings.extend(result['warnings'])
         text = ''.join(replacements.get(block['id'], block['text']) for block in blocks)
         validate_document_text(text, output=True)
+    checks = review_document(provider, source, text, frozen, document_decisions=document_decisions, document_wording=document_wording)
+    revision_passes = 1 if provider.mode in LIVE_PROVIDERS else 0
+    text, replacements, checks, repair_warnings, repaired = _repair_voice_findings(
+        provider, source, blocks, sections, batches, frozen, replacements, checks, document_decisions=document_decisions,
+        document_wording=document_wording, wording_plan=wording_plan, wording_attempts=wording_attempts)
+    warnings.extend(repair_warnings)
+    if repaired:
+        revision_passes = 2
+    final_blocks = {block['id']: replacements.get(block['id'], block['text']) for block in blocks}
+    checks = attach_instruction_report(checks, instruction_report(wording_plan, blocks, parse_document(text)[0], final_blocks), wording_attempts)
     for section in sections:
         section['output_chars'] = sum(len(replacements.get(block['id'], block['text'])) for block in blocks if block['section'] == section['id'])
-    checks = review_document(provider, source, text, frozen)
     if warnings:
         # An empty subsequent model review is not an explicit resolution of a
         # generator's caveat. Keep those caveats attached to the checked draft.
@@ -520,6 +866,8 @@ def generate_document(provider, context, source, controls, payload, offline_warn
     warnings.extend(checks['warnings'])
     warnings.append(REVIEW_LIMITATION)
     return {'text': text, 'provider': provider.mode,
+            'revision_passes': revision_passes,
+            'revision_summary': revision_summary(source, text, frozen['controls']['revision']),
             'evidence_ids': [item['id'] for item in frozen.get('authored_examples', [])] if provider.mode in LIVE_PROVIDERS else [],
             'warnings': list(dict.fromkeys(warnings)), 'checks': checks, 'sections': sections,
             'generation_batches': len(batches) if provider.mode in LIVE_PROVIDERS else 0}

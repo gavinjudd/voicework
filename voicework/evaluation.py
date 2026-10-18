@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .learning import retrieve, validate_context
+from .learning import validate_context
 from .store import text_field
 from .migrations import allow_live_provider
 from .live import LIVE_PROVIDERS, PROVIDER_MODES
@@ -100,7 +100,8 @@ class EvaluationStore:
             raise ValueError("Evaluation evidence must be a list of samples")
         if not isinstance(preferences, list) or not all(isinstance(item, dict) for item in preferences):
             raise ValueError("Evaluation preferences must be a list of feedback records")
-        approved = copy.deepcopy(retrieve(evidence, context))
+        from .sample_selection import provider_samples
+        approved = copy.deepcopy(provider_samples(evidence, context))
         preferences = copy.deepcopy(preferences)
         model = text_field(getattr(provider, "model", "") or "", "model", 200)
         # No transaction is held while the provider is running. Failed or partial

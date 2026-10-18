@@ -6,7 +6,8 @@ import uuid
 
 
 class DocumentJobs:
-    def __init__(self, generation_slots, max_jobs=16, lifetime=3600):
+    def __init__(self, generation_slots, max_jobs=16, lifetime=3600, failure_messages=None):
+        self.failure_messages = failure_messages
         self.slots = generation_slots
         self.max_jobs = max_jobs
         self.lifetime = lifetime
@@ -57,9 +58,9 @@ class DocumentJobs:
             update = {'status': 'complete', 'result': result}
         except ValueError:
             # Provider validation errors may originate in untrusted output.
-            update = {'status': 'failed', 'error': 'The document could not be completed or checked. Your source is unchanged. Check provider availability and retry; no partial draft was accepted.'}
+            update = {'status': 'failed', 'error': self.failure_messages[0] if self.failure_messages else 'The document could not be completed or checked. Your source is unchanged. Check provider availability and retry; no partial draft was accepted.'}
         except Exception:
-            update = {'status': 'failed', 'error': 'The document job failed. Your source and saved training records are unchanged.'}
+            update = {'status': 'failed', 'error': self.failure_messages[1] if self.failure_messages else 'The document job failed. Your source and saved training records are unchanged.'}
         finally:
             self.slots.release()
         with self.lock:

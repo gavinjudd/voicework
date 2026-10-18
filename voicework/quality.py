@@ -16,8 +16,9 @@ from pathlib import Path
 from .corrections import SNAPSHOT_FIELDS, lesson_fingerprint
 from .evaluation import NEUTRAL_CONTROLS
 from .language import matching_lessons, validate_lesson
-from .learning import contextual_preferences, retrieve, validate_context
+from .learning import contextual_preferences, validate_context
 from .matching import same_channel
+from .matching import lesson_context_matches
 from .store import text_field
 from .migrations import allow_live_provider
 from .live import LIVE_PROVIDERS, PROVIDER_MODES
@@ -72,6 +73,10 @@ def _eligible_preferences(preferences, context, target_id):
             continue
         if item.get("is_language_lesson") is True:
             if item.get("id") == target_id or not matching_lessons([item], context):
+                continue
+        elif item.get("is_preference") is True:
+            if (target_id in item.get("linked_lesson_ids", []) or not item.get("estimate", {}).get("applies")
+                    or not lesson_context_matches(item.get("context", {}), context)):
                 continue
         elif item.get("is_prior") is True:
             if item.get("confirmed") is not True:
@@ -178,13 +183,14 @@ class QualityStore:
         for label, records in (("evidence", evidence), ("common preferences", common_preferences)):
             if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
                 raise ValueError("Quality-check %s must be a list of records" % label)
-        approved = copy.deepcopy(retrieve(evidence, context))
+        from .sample_selection import provider_samples
+        approved = copy.deepcopy(provider_samples(evidence, context))
         common = copy.deepcopy(_eligible_preferences(common_preferences, context, lesson_id))
         controls = copy.deepcopy(NEUTRAL_CONTROLS)
         provenance = {
             "correction_id": correction_id, "lesson_id": lesson_id, "lesson_fingerprint": fingerprint,
             "evidence": [_reference(item, "sample") for item in approved],
-            "common_preferences": [_reference(item, "language_lesson" if item.get("is_language_lesson") else "prior" if item.get("is_prior") else "feedback") for item in common],
+            "common_preferences": [_reference(item, "language_lesson" if item.get("is_language_lesson") else "preference" if item.get("is_preference") else "prior" if item.get("is_prior") else "feedback") for item in common],
             "context_fingerprint": _fingerprint(context), "brief_fingerprint": _fingerprint(brief),
             "common_inputs_fingerprint": _fingerprint({"context": context, "brief": brief, "controls": controls,
                                                        "evidence": approved, "preferences": common, "provider": mode, "model": model}),

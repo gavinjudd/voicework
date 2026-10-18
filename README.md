@@ -8,27 +8,51 @@ Start without samples: write a useful draft, edit it your way, and choose which 
 
 The document limit is **120,000 characters**; output is capped at **240,000 characters**. Rich Word/PDF layout and arbitrary MDX components are not supported as editable document formats. Model review is an additional diagnostic, not proof of fidelity or factual correctness. Offline mode preserves the source exactly and marks semantic/voice review unavailable.
 
-Source is published in the private [gavinjudd/voicework repository](https://github.com/gavinjudd/voicework).
+Content review distinguishes wording changes from meaning changes. **Individual edits & meaning** shows exact before/after edit spans, surrounding context and a separate assessment for each edit—even when a harmless rephrase and a changed claim share a paragraph or sentence. Related reconstruction that cannot be separated confidently is labeled as assessed together. Findings name the actual difference, such as **Actor changed** or **Claim strength changed**. Overlapping review and numeric signals appear as supporting evidence under one alert for that edit. Unattributed concerns remain separate; missing, uncertain, conflicting or out-of-limit assessments remain visible. Numbers, quotations, links and protected structure retain their independent checks, including their original severity. These assessments do not train the profile or establish factual correctness.
+
+Sentence joins and splits no longer force whole passages into one assessment. Stable phrase and clause boundaries separate local changes, while removed/reinserted phrases stay together where their wording is interdependent. Each request retains the surrounding passage so moved wording can be checked in context. Harmless negation rephrases can therefore receive their own preserved verdict beside a changed claim. This is bounded text alignment, not a guarantee that every semantic distinction can be isolated.
+
+Every detected edit is scheduled for assessment. The 24-edit budget applies to each provider call, never the whole document; additional bounded calls assess the remaining edits with their original context. General content and voice review runs once per source/draft review window, so supplemental edit calls cannot repeat its alerts. Equivalent negative/modal wording clears its lexical alert when complete assessments account for the wording difference; uncertain, missing, conflicting or failed reviews and protected-content errors remain visible. Counts show assessed and unassessed edit candidates, not a fidelity score.
+
+Voicework is open source under the [MIT License](LICENSE). The [source repository](https://github.com/gavinjudd/voicework) contains the app, tests and documentation, with no personal writing corpus or profile. Profiles and exports are stored locally; live generation sends the selected writing and guidance to your configured provider. See [data boundaries](SECURITY.md).
+
+Whole-document **Revision** defaults to **Rewrite in my voice**: preferred/avoided pairs guide how to reconstruct the prose while its meaning and protected material stay fixed. **Light edit** preserves existing expression for local corrections. **Length → Fit the rewrite** gives prose room to find its cadence; **Keep each part about as long** suits short labels and captions and still permits new sentence construction. The result reports wording retained as an edit description, not a voice score. Review can flag a copyediting-only result when concrete supplied voice preferences remain unapplied; low edit distance by itself is not a failure. Liked third-party writing supplies partial cues alongside the existing profile, not an exact template.
+
+In voice-rewrite mode, evidence-backed preference violations receive at most one targeted revision, followed by review of the complete document. Optional style suggestions never trigger a rewrite or make a completed review require changes; uncertain or unclassified findings remain visible for review. A failed or incompletely reviewed revision keeps the initial complete draft and its findings. This is not triggered by a target change percentage or a missing authored sample.
+
+Voice rewrites also check for over-polishing: a factually equivalent paraphrase can still erase a preferred reaction, idiom or degree of emphasis. Short **Prefer** expressions already in the manuscript serve as review anchors, never literal locks. When the wording changes, review must identify the chosen quality and quote the corresponding source/draft expression. Equivalent fresh wording is allowed. A concrete preference conflict can trigger the bounded revision; a missing or uncertain aspect review stays visible and never demands restoring the original words. The app validates quote provenance and review coverage, not the model's stylistic judgment. Explicit formal register takes precedence; whole preferred paragraphs are never locked as templates.
+
+Remember the aspect you liked through **Voice profile → Learn preferences from evidence**: define the quality in ordinary language, attach the example or comparison separately, and review the attribution. The saved quality applies to analogous writing without requiring any example words. Only reviewed evidence contributes; pending extrapolations stay inactive. Review evidence, withdraw an attribution or pause the preference at any time. This uses the existing persistent learner, not a phrase blacklist or model-weight training.
+
+Voice findings distinguish **Preference violation**, **Optional style suggestion**, and **Preference assessment uncertain**. A violation must cite applicable supplied preferences or current instructions, quote the affected wording, and explain why it conflicts in this context. General taste, inferred identity goals and learned tendencies do not become mandatory rules. The model must consider exceptions and surrounding prose: preferring a conversational viewpoint does not require first person in every sentence. Optional suggestions appear separately with their reasoning and preference references. Legacy findings without this evidence remain uncertain, and unsupported quotations/references invalidate the review. These are reviewable model assessments, not proof that you would reject the draft.
+
+**Evidence coverage** is reported separately from writing findings. Missing authored examples alone does not make completed checks require review when applicable lessons or instructions were supplied. The app derives notices from the actual inputs and displays them beside the completed review; it does not ask the model to invent coverage text. Optional suggestions and coverage notices do not request a change or trigger a repair. Missing voice guidance remains **Not checked**. Meaning/preference findings, unresolved assessment concerns and unavailable or incomplete reviews remain explicit; a coverage notice cannot clear them. Earlier results must be rechecked to use this distinction.
+
+**Keep an optional rephrase for one article:** choose **Keep this wording for this article** beneath a current optional suggestion. The local database remembers the paired quotations, paragraph, original source, context and controls, with a reason and action history. Voice classification now receives that narrow choice before judging the passage: an unchanged accepted style tradeoff takes precedence over the broad lesson for that same objection. It never approves the whole paragraph, a meaning change or an independent preference conflict. The checker still assesses every edit; substantive or uncertain findings are never silently downgraded afterward.
+
+A changed paragraph stops automatic acknowledgement. Within the same original article and context, the previous choice remains historical context for reviewing that passage, so an equivalent rephrase need not become a violation merely because its words differ. Changed context, controls, original source or a revoked choice exclude it. A matching optional finding appears under **Wording you chose to keep** instead of being proposed again; different quote boundaries or preference references remain open rather than being guessed equivalent. Review the scope/history there and use **Undo keep decision** to reconsider it. Completed checks show which choices were supplied to classification. Decisions remain separate from learned voice, authored samples and meaning-only prompts.
+
+**Generation now receives saved article wording.** A kept rephrase supplies its exact accepted quote to the matching source block in both the initial rewrite and any targeted voice revision. **Exact wording for this article** also lets you save an explicit correction or preserve a phrase already in the source, with a reason and reversible history. These instructions are limited to the original article, context, controls and source passage. They do not freeze an entire paragraph, turn an example into a global phrase rule, or approve meaning changes. Keep the original source in the source editor; replacing it starts a different article scope.
+
+The app checks literal compliance in the returned block and retries a missed instruction once through the same provider. It never restores words by substitution. If the provider still misses the instruction, the complete draft and an **Article wording not followed** warning remain visible. A targeted revision that loses required wording is rejected. Overlapping contradictory instructions, ambiguous source anchors and instructions beyond the bounded context limit fail visibly. **Article wording in this result** shows applied/skipped instructions and generation attempts. Exact wording corrections persist separately from general teaching and are excluded from profile exports. Undoing a correction changes future guidance, not the current article text.
+
+Whenever review considers a keep decision or article wording correction, **every individual edit** is assessed in separate meaning-only calls that receive neither, including the first batch of edits. This costs one additional call per complete-document review batch containing edits. Literal compliance cannot clear a meaning problem, independent preference conflict or incomplete review. A failed independent review remains visibly incomplete.
+
+Voice findings assess **register** and **personal perspective** independently, with a reason for each. Over-formal wording can retain the writer's reaction completely; natural wording can remove it. Pronouns alone establish neither outcome. The app displays both assessments alongside the unchanged violation/suggestion classification. Targeted repair uses the distinction without adding unsupported personal claims. Earlier findings without these assessments require a recheck; no effects are guessed from their diagnostic codes.
 
 ## Run
 
 Requires Python 3.9+; no Python or JavaScript packages are needed for the app.
 
 ```sh
-cd /path/to/voicework
+git clone https://github.com/gavinjudd/voicework.git
+cd voicework
 python3 -m voicework --provider codex --model gpt-6-astra
 ```
 
 Open **http://127.0.0.1:8765**. Codex mode requires a [Codex CLI](https://learn.chatgpt.com/docs/developer-commands) compatible with the selected model, a working login, model access, and network access. The adapter requests `xhigh` reasoning. It uses your local CLI authentication; the app never asks for a password or API key. Select an executable with `--codex-bin`, or set `VOICEWORK_CODEX_BIN`; the flag takes priority, then the environment variable, then `codex` on PATH.
 
-On the development Mac, PATH's CLI 0.137.0 rejected Astra because it required a newer CLI. The app-bundled CLI 0.162.0-alpha.17.2 passed a synthetic live draft with Astra and `xhigh`. This was a compatibility issue, not an authentication failure. This Mac can use:
-
-```sh
-python3 -m voicework --provider codex --model gpt-6-astra \
-  --codex-bin "/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex"
-```
-
-That path is specific to this installation. The smoke test verifies live generation, not personalized writing accuracy. The Chrome extension has not been verified installed in the user's browser. See [VERIFICATION.md](docs/VERIFICATION.md) for the recorded checks.
+Use a CLI version that supports your selected model. If the executable is not on PATH, pass its full path with `--codex-bin`. Provider failures remain explicit; the app does not switch to an offline result silently. Historical integration checks are recorded in [VERIFICATION.md](docs/VERIFICATION.md).
 
 For a completely offline walkthrough of the workflow:
 
@@ -75,6 +99,12 @@ The **Voice confidence** bar in Practice, Samples, and Voice profile shows three
 
 ## Finding your writing
 
+**Authored samples are selected automatically across contexts.** Preview matching guidance shows each selected sample's original context, the writing quality it may contribute, the reason and (for transfers) a supporting excerpt. Existing context matches rank first. A bounded second path looks for a recognized writing purpose, compatible audience and boundaries, topic evidence and an observed cue in the supplied text. It can transfer explanatory sequencing, question-led problem framing, caveated alternatives, progress updates or review requests. It abstains on unknown purposes and weak evidence. This is a transparent retrieval heuristic, not a semantic guarantee or a newly approved preference.
+
+Only confirmed, non-held-out writing qualifies. AI-assisted, pending and rejected samples are excluded before text assessment; prompts addressed to AI are excluded from human-facing writing. At most six examples are supplied, with at most three automatic transfers; automatic selections deduplicate identical excerpts. **Why this sample?** explains each choice. **Exclude from this document** removes a choice without altering the sample; **Allow automatic selection again** restores eligibility. Context changes clear these document-specific exclusions and explicit references. Changing either makes checks stale. You can still choose an explicit reference and name its quality under **Authored references for this document**; these reserve slots. The same selection rules reach drafts, practice, comparisons and MCP guidance. MCP still omits examples by default.
+
+Transfer applies only to the named quality. A short message cannot establish article-format voice fit or supply facts, goals, instructions, slang or formatting. Current instructions and applicable lessons take priority. Original labels and authorship remain unchanged; generation and review freeze the same selections. Evidence coverage remains separate from meaning and preference warnings.
+
 Discovery jobs save a queue and directory checkpoints in SQLite. Start with selected local folders, run bounded batches, resume after restarting, or cancel. They skip sensitive directories, hidden files, links, credential-like content and common generated trees; errors and extraction caps are reported. Changed or unreadable sources are skipped with warnings. Start a new scan to cover changed sources. A completed queue means that pass finished, not that every document was readable or the whole computer was covered.
 
 Supported formats are TXT, Markdown, EML, DOCX and supported JSON exports, plus PDF when optional `pdftotext` is installed. Files are capped at 10 MiB, samples at 30,000 characters, conversation extraction at 500 messages per file, and PDF extraction at the first 30 pages. The older one-pass discovery API also remains available. Missing context on discovered candidates receives provisional offline suggestions; ambiguous situations can remain unknown. Explicit supplied contexts are preserved.
@@ -85,9 +115,25 @@ Only rendered rows/links in the current tab are discoverable. Scroll and invoke 
 
 All discovered/imported passages start unconfirmed. A document being on your computer or in your Drive is **not** proof you wrote it. Confirm a whole passage only when it is your authored writing; for mixed-authorship documents, paste only your excerpt. AI preferences remain feedback rather than becoming authored samples.
 
+## Learn preferences from evidence
+
+In **Voice profile**, define a quality and the contexts where it belongs. Add an explicit preference, a liked passage, one of your edits, a saved correction, or a rated comparison. Explain the specific aspect it supports or opposes. References default to pending; review an interpretation before it affects writing. **Learn from my edit** and **Teach the aspect I preferred** open this review without silently learning the entire passage or choice.
+
+Strength describes the direction and degree you want. Evidence confidence describes independent support and consistency under a transparent heuristic; it is not a probability or writing-accuracy score. Same-source comments have a capped contribution. Conflicting evidence remains visible and disputed preferences abstain from drafting. Review, withdraw, restore, pause, and revise interpretations while retaining their history. Direct instructions and explicit lessons retain priority.
+
+Applicable estimates reach drafting, document rewriting/review, practice, blind comparisons, MCP guidance and portable exports. Raw preference-source passages stay local and are excluded from guidance and exports. Only confirmed, non-held-out samples are authored examples. The existing lessons and authored records are never converted into numeric weights automatically. See [the learner specification](docs/PREFERENCE_LEARNER.md) for the calculation, source policies and limits.
+
+## Identity and goals in context
+
+**Voice profile → Identity and goals, in context** separates how you write from what you want a particular audience to understand about you. Create a situation, then enter your own goals or supply relevant context. Message/document edits, saved style corrections, practice feedback and rated comparisons can open this intake directly.
+
+The collecting assistant supplies original passages and provenance; it does not need to infer identity. Paste context, open a selected `.txt`, `.md` or `.json` file, or use the MCP collection tools. Mark assistant summaries separately. Voicework uses its configured live provider to interpret selected sources, requires exact supporting quotes, and retains uncertainties, conflicts and questions. Up to twelve related sources can be processed per pass; excess material is rejected explicitly rather than silently truncated. Offline rehearsal saves context but cannot infer goals.
+
+Every inferred update remains pending. Review the current and proposed wording, edit it, choose individual fields, reject it or undo an acceptance. Only reviewed goals reach matching writing contexts. An unknown life goal stays unknown; liking a third-party passage neither confirms its claims nor makes its persona yours. This is in-context guidance, not a psychological assessment or model-weight training. See [identity and goals](docs/IDENTITY_GOALS.md) for boundaries and the collector workflow.
+
 ## What “learning” means here
 
-The current system uses context-matched examples, descriptive writing patterns, persistent positive/negative feedback, active language lessons and confirmed prior packets in generation prompts. It is **in-context calibration**, not model-weight fine-tuning. Language lessons are explicit preferences, kept separately from authored samples, prior knowledge and evaluation votes; they can teach a desired style without claiming you already write that way. Samples are optional, and presentation preferences are conditional. Your current chat's hidden state and past Codex conversations are not automatically available; supply compact prior knowledge explicitly, with its source, for review.
+The current system uses context-matched examples, descriptive writing patterns, persistent positive/negative feedback, active language lessons, reviewed contextual preference estimates and confirmed prior packets in generation prompts. It is **in-context calibration**, not model-weight fine-tuning. Language lessons are explicit preferences, kept separately from authored samples, prior knowledge and evaluation votes; they can teach a desired style without claiming you already write that way. Samples are optional, and presentation preferences are conditional. Your current chat's hidden state and past Codex conversations are not automatically available; supply compact prior knowledge explicitly, with its source, for review.
 
 Context matching recognizes a small, explicit vocabulary of equivalent labels, such as “request review” and “ask for feedback,” while preserving every populated lesson condition. Audience, relationship, stakes and channel boundaries keep incompatible examples out. Specific requests need relevant evidence; the app no longer fills the prompt with unrelated same-channel samples. Custom and qualified labels stay literal, and scenario notes remain conditional guidance. This is conservative matching, not general semantic understanding.
 
@@ -129,14 +175,21 @@ A generated draft lists the examples supplied to the model. These IDs explain re
 
 ## Use your voice inside Claude, Codex or Cursor (MCP)
 
-`python3 -m voicework.mcp` is a local [Model Context Protocol](https://modelcontextprotocol.io) server over stdio, using only the standard library. It reads the same database as the app (the app does not need to be running) and does not call a model.
+`python3 -m voicework.mcp` is a local [Model Context Protocol](https://modelcontextprotocol.io) server over stdio, using only the standard library. Guidance and context intake use the same local database without a running app. Explicit `process_identity_context` calls require the running app and ask it to use its configured model; the collecting client's model does not perform this inference.
 
 | Tool | What it does |
 | --- | --- |
+| `list_preferences` | Existing scoped preference IDs, strength and evidence confidence, without raw source passages |
+| `propose_preference_evidence` | Proposes an attributed aspect for an existing preference. Always pending until reviewed in Voicework; it cannot confirm evidence or rewrite a vote |
 | `list_voice_contexts` | Channels with reviewed evidence and their counts |
 | `get_voice_guidance` | The context-matched lessons, practice reasons and presentation preferences a Voicework draft would use for a situation. Authored excerpts (`include_examples`) and confirmed priors (`include_priors`) are opt-in per call |
 | `get_story_voice` | A Story Engine voice file for chosen channels. Excerpts (`include_examples`) and confirmed priors as facts (`include_facts`) are opt-in per call; `topic` skips excerpts about the story's subject |
 | `propose_lesson` | Queues a suggested lesson after you correct an assistant's wording. **It changes nothing** until you accept it under **Voice profile → Proposed lessons** (max 50 pending) |
+| `get_identity_intake` | Lists identity contexts, or returns a selected context's missing fields and collection plan |
+| `create_identity_intake` | Creates an empty context scaffold with no active goals |
+| `submit_identity_context` | Saves selected original context, edits or native evidence, with provenance; no proposed identity fields are required |
+| `process_identity_context` | Asks the same-profile running app to infer with its configured provider and returns a job ID |
+| `get_identity_learning_job` | Reads inference status; the result remains pending for human review |
 
 Register it with your client. `scripts/voicework_mcp.py` works from any directory; `--data-dir` defaults to this repository's `data/`.
 
@@ -159,6 +212,8 @@ args = ["/path/to/voicework/scripts/voicework_mcp.py"]
 
 Guidance carries the same boundaries as an export: it is style evidence, not facts, a measured match or proof of authorship. Whatever a tool returns is sent to the client's model, so excerpts and priors stay off unless a call asks for them.
 
+Use the **same `--data-dir`** for the app and MCP server. Set `--app-url http://127.0.0.1:PORT` for a non-default app port; remote app URLs are refused. No MCP tool can accept identity inferences. Clients without a local stdio bridge can provide selected source text/files for manual intake; this does not register a connector or give cloud ChatGPT access to your laptop.
+
 ## Check whether calibration helps: evaluation panels
 
 A panel is a fixed set of real situations you will actually write, balanced across channels. Each run turns every item into an ordinary blind baseline-vs-calibrated comparison that you rate on **Check fit → Compare your whole voice profile**. The report breaks results down by channel and by run, so you can repeat the same panel after a defined batch of corrections and compare.
@@ -174,15 +229,14 @@ python3 -m voicework.panel report baseline-2026-10
 
 Creating a panel refuses a brief that duplicates or heavily overlaps a confirmed, non-held-out sample, because the calibrated draft would receive that sample as an example; mark it held out or rewrite the brief. Panels are frozen once created. Each run records counts and a hash of what the profile contained, never sample text. Failed items can be finished with `--resume`. Offline runs are labelled rehearsal. A small panel gives a direction, not an accuracy rate.
 
-## Tell stories in your voice (Story Engine)
+## Export a portable story voice
 
-**Voice profile → Use with Story Engine** turns your profile into a voice file for [Story Engine](https://github.com/gavinjudd/story-engine). Describe the story use (for example *spoken interview answer*) and tick the channels whose habits should carry over. Channels saved as broad long-form lessons, and the `spoken story` and `written story` channels once you have taught them, are preselected. The others stay off until you choose them. Preview, then export `story-voice.json`. The same is available offline from the command line, reading the local database directly:
+**Voice profile → Use with Story Engine** turns your profile into a versioned voice file for a compatible story-writing tool. The UI and format retain the Story Engine integration name; using the export does not require access to that separate project. Describe the story use (for example *spoken interview answer*) and tick the channels whose habits should carry over. Channels saved as broad long-form lessons, and the `spoken story` and `written story` channels once you have taught them, are preselected. The others stay off until you choose them. Preview, then export `story-voice.json`. The same is available offline from the command line, reading the local database directly:
 
 ```sh
 python3 -m voicework.story_bridge --list
 python3 -m voicework.story_bridge --target 'spoken interview answer' --channel 'long-form writing' \
   --output story-voice.json            # add --examples to include up to 5 confirmed excerpts
-python3 story_engine.py bundle --voice-profile story-voice.json --seed '…'   # in the story-engine repo
 ```
 
 Enabled lessons, including remembered corrections, become traits and avoidances. Practice reasons and story-relevant presentation preferences come next, followed by habits measured separately for each chosen channel from its confirmed, non-held-out samples. Each measured habit says how often it occurs and keeps its channel as its scope: average sentence length and the share of short and long sentences, closed-class signature words such as `“ngl” (3 of 8 samples)` (never subject words), contractions with or without apostrophes, lowercase starts, short lines, paragraph length, and punctuation used regularly. With four or more samples, em dashes, exclamation marks or semicolons that never appear become an avoidance. Story Engine uses a measured habit at or below its rate and only where its register fits. Every trait keeps its learned context, such as `[work email · audience: teammates]`, and broader lessons outrank narrowly conditioned ones. The output is capped at 32 traits and 24 avoidances, and the file reports what was trimmed. Up to 8 measured habits, interleaved across channels, always keep their place, so a large set of lessons cannot crowd out what your samples show; lessons fill the rest. Samples, lessons and practice notes addressed to an AI assistant (an audience or relationship such as *writing assistant*, *ChatGPT* or *user to writing assistant*) are left out by default, along with held-out pieces like that: prompts are a different register from writing for people. Add `--include-ai-addressed` to keep them. Held-out or unconfirmed samples, AI and edited practice options, emoji and sign-off preferences, and evaluation ratings are never included. Excerpts require explicit opt-in. With no usable guidance, `voice_profile` is `null`. The file describes reviewed style evidence. It does not measure fidelity or prove authorship. CLI output files are new and created with mode 0600.
@@ -204,7 +258,7 @@ Story Engine's skill can also call `get_story_voice` and `propose_lesson` direct
 - The Codex process runs in a temporary directory with a read-only sandbox, ignored user config, ephemeral mode, and major tool/integration features disabled. This narrows its behavior; it is not a new OS-level confidentiality boundary against administrator-managed configuration. The adapter does not supply arbitrary local files or source instructions as executable requests.
 - Deleting a sample removes it from subsequent retrieval/profile exports. Previously downloaded exports, browser-capture files, prior generated drafts, backups and any provider-side retention are separate copies.
 - Explicitly remembering a correction stores its original and revised text locally as provenance. Undo stops its lesson from guiding future drafts; it does not erase that history or previously generated quality-check outputs. Correction source drafts are not automatically included in exported writing examples.
-- Starting the app does not deploy it, start a background monitor, or ingest personal data automatically. The private source repository is separate from local writing and the database.
+- Starting the app does not deploy it, start a background monitor, or ingest personal data automatically. The public source repository is separate from local writing and the database.
 
 ## Developer commands
 
@@ -222,3 +276,7 @@ GitHub Actions runs the same checks on Python 3.9 and 3.14 (`.github/workflows/c
 Node is optional for syntax checks, not required to run the app. See [BUILD_CONTRACT.md](docs/BUILD_CONTRACT.md) for the API and [AGENTS.md](AGENTS.md) for repository development rules.
 
 Working name: Voicework. Naming/trademark availability has not been assessed.
+
+## Contributing and licensing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and verification, [SECURITY.md](SECURITY.md) for data boundaries and reporting, and [LICENSE](LICENSE) for the MIT terms. Model access and any provider usage remain subject to your own provider account. No personal profile or writing corpus is bundled.

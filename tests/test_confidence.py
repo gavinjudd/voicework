@@ -21,12 +21,23 @@ def case(brief="The review is Friday.", channel="work", **fields):
 
 
 class ConfidenceTests(unittest.TestCase):
+    def test_applicable_learned_preference_is_readiness_evidence_without_authorship_or_validation(self):
+        items = [{'context': {'channel': 'technical article'}, 'estimate': {'applies': True}},
+                 {'context': {'channel': 'personal'}, 'estimate': {'applies': False}},
+                 {'enabled': False, 'estimate': {'applies': True}}]
+        summary = build_voice_confidence([], [], learned_preferences=items)
+        self.assertEqual(summary['completed'], 1)
+        self.assertEqual(summary['evidence']['learned_preferences'], 1)
+        self.assertEqual(summary['evidence']['authored_samples'], 0)
+        self.assertEqual(summary['validation']['rated_real'], 0)
+        self.assertEqual(summary['evidence']['channels'], ['technical article'])
+
     def test_empty_state_has_no_implied_accuracy(self):
         summary = build_voice_confidence([], [])
         self.assertEqual(summary["label"], "Evidence needed")
         self.assertEqual((summary["completed"], summary["total"]), (0, 3))
         self.assertEqual([item["complete"] for item in summary["milestones"]], [False] * 3)
-        self.assertEqual(summary["evidence"], {"authored_samples": 0, "feedback": 0, "lessons": 0, "channels": []})
+        self.assertEqual(summary["evidence"], {"authored_samples": 0, "feedback": 0, "lessons": 0, "learned_preferences": 0, "channels": []})
         self.assertTrue(all(value == 0 for key, value in summary["validation"].items() if key != "channels"))
         self.assertIn("not measured writing accuracy", summary["note"])
         self.assertIn("do not validate the current profile", summary["note"])
@@ -52,7 +63,7 @@ class ConfidenceTests(unittest.TestCase):
         lessons = [lesson(), lesson(enabled=False, context={"channel": "personal"}), lesson(guidance="  ")]
         summary = build_voice_confidence([], [], lessons)
         self.assertEqual(summary["completed"], 1)
-        self.assertEqual(summary["evidence"], {"authored_samples": 0, "feedback": 0, "lessons": 1, "channels": ["work"]})
+        self.assertEqual(summary["evidence"], {"authored_samples": 0, "feedback": 0, "lessons": 1, "learned_preferences": 0, "channels": ["work"]})
         self.assertEqual(build_voice_confidence([], [], [lesson(guidance="", preferred="Let's go.")])["completed"], 1)
 
     def test_nonempty_practice_preferences_count_separately_from_authorship(self):

@@ -136,7 +136,7 @@ def _usable_sample(sample, include_ai=False):
             (include_ai or not addressed_to_ai(sample.get("context"))))
 
 
-def available_sources(samples, feedback, lessons):
+def available_sources(samples, feedback, lessons, preferences=()):
     """Group evidence by matching channel so the user can choose deliberately."""
     groups = {}
 
@@ -159,6 +159,9 @@ def available_sources(samples, feedback, lessons):
     for entry in feedback:
         if (item := group(entry.get("context"))):
             item["feedback"] += 1
+    for preference in preferences:
+        if preference.get("estimate", {}).get("applies") and (item := group(preference.get("context"))):
+            item["preferences"] = item.get("preferences", 0) + 1
     result = []
     for key, item in groups.items():
         labels = sorted(item.pop("labels").items(), key=lambda pair: (-pair[1], pair[0]))
@@ -166,8 +169,8 @@ def available_sources(samples, feedback, lessons):
         item["labels"] = [label for label, _ in labels]
         # Preselect only lessons deliberately saved as broad long-form guidance, and
         # teaching captured while telling stories.
-        item["suggested"] = ((key == "long-form writing" and item["lessons"] > 0) or
-                             (key in STORY_CHANNELS and item["lessons"] + item["feedback"] > 0))
+        item["suggested"] = ((key == "long-form writing" and item["lessons"] + item.get("preferences", 0) > 0) or
+                             (key in STORY_CHANNELS and item["lessons"] + item["feedback"] + item.get("preferences", 0) > 0))
         result.append(item)
     result.sort(key=lambda item: (not item["suggested"], -(item["lessons"] + item["feedback"] + item["samples"]), item["channel"]))
     return result
@@ -417,12 +420,12 @@ def select_channels(channels):
 
 
 def build_story_voice(samples, feedback, lessons, target, channels, include_examples=False, now=None, *,
-                      priors=(), include_facts=False, topic=None, include_ai_addressed=False):
+                      priors=(), include_facts=False, topic=None, include_ai_addressed=False, preferences=()):
     """Return the envelope; raises ValueError for a missing target or channel."""
     target = validate_target(target)
     topic = validate_topic(topic)
     selected = select_channels(channels)
-    sources = {item["channel"]: item for item in available_sources(samples, feedback, lessons)}
+    sources = {item["channel"]: item for item in available_sources(samples, feedback, lessons, preferences)}
     missing = [key for key in selected if key not in sources]
     labels = [sources[key]["label"] if key in sources else key for key in selected]
 
@@ -484,9 +487,14 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
 
     # Explicit user teaching outranks inferred measurements when space is short, but measured
     # habits keep up to MEASURED_SLOTS places: they are what the samples actually show.
+    soft = sorted([item for item in preferences if item.get("estimate", {}).get("applies") and chosen(item.get("context"))],
+                  key=lambda item: -item["estimate"]["influence"])
+    soft = soft[:4]
+    learned_traits = ["%s Supporting preference: %s" % (_scope(item["context"]), _clean(item["guidance"])) for item in soft]
     taught = traits + notes + presentation
-    candidates = taught + patterns
-    final_traits = taught[:MAX_TRAITS - min(len(patterns), MEASURED_SLOTS)]
+    candidates = taught + learned_traits + patterns
+    final_traits = taught[:MAX_TRAITS - min(len(patterns), MEASURED_SLOTS) - len(learned_traits)]
+    final_traits += learned_traits
     final_traits += patterns[:MAX_TRAITS - len(final_traits)]
     avoid_candidates = avoid + pattern_avoid
     final_avoid = avoid_candidates[:MAX_AVOID]
@@ -563,8 +571,10 @@ def build_story_voice(samples, feedback, lessons, target, channels, include_exam
                    "samples_measured": len(measured), "examples_included": len(examples),
                    "ai_addressed_left_out": 0 if include_ai_addressed else ai_addressed,
                    "examples_skipped_for_topic": skipped_for_topic, "facts_included": len(facts),
+                   "preferences_used": len(soft),
                    "traits": len(final_traits), "avoid": len(final_avoid)},
         "lesson_ids": [ident for ident in used_lessons if ident],
+        "learned_preferences": [{key: item[key] for key in ("id", "label", "context", "estimate")} for item in soft],
         "excluded": excluded,
         "warnings": warnings,
         "notice": notice,
@@ -640,14 +650,16 @@ def main(argv=None):
         if any(path and os.path.lexists(path) for path in (args.output, args.holdout_output)):
             raise FileExistsError
         samples, feedback, lessons, priors = _load(args.data_dir)
+        from .preference_learner import PreferenceLearner
+        preferences = PreferenceLearner(Path(args.data_dir) / "voicework.sqlite3").export_preferences()
         if args.list:
-            for item in available_sources(samples, feedback, lessons):
+            for item in available_sources(samples, feedback, lessons, preferences):
                 print("%s%s  lessons=%d feedback=%d samples=%d" % (
                     item["label"], "  (suggested)" if item["suggested"] else "", item["lessons"], item["feedback"], item["samples"]))
             return 0
         result = build_story_voice(samples, feedback, lessons, args.target, args.channel or [], args.examples,
                                    priors=priors, include_facts=args.facts, topic=args.topic,
-                                   include_ai_addressed=args.include_ai_addressed)
+                                   include_ai_addressed=args.include_ai_addressed, preferences=preferences)
         holdout = None
         if args.holdout_output:
             holdout = build_holdout_pack(samples, args.channel or [], include_ai_addressed=args.include_ai_addressed)

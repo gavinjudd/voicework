@@ -33,7 +33,7 @@ def _has_preference(item):
     return False
 
 
-def build_voice_confidence(samples, feedback, language_lessons=(), evaluations=(), quality_checks=()):
+def build_voice_confidence(samples, feedback, language_lessons=(), evaluations=(), quality_checks=(), learned_preferences=()):
     """Summarize current evidence and historical rated live-model observations.
 
     Distinct situations use all declared context fields plus the brief, with
@@ -45,11 +45,13 @@ def build_voice_confidence(samples, feedback, language_lessons=(), evaluations=(
     preferences = [item for item in feedback if _has_preference(item)]
     lessons = [item for item in language_lessons if item.get("enabled") is True
                and any(_normalize(item.get(field)) for field in ("guidance", "preferred", "avoided"))]
+    learned = [item for item in learned_preferences if item.get("enabled", True) is True and item.get("estimate", {}).get("applies") is True]
     evidence = {
         "authored_samples": len({_normalize(item["text"]) for item in authored}),
         "feedback": len(preferences),
         "lessons": len(lessons),
-        "channels": sorted({channel for item in authored + preferences + lessons
+        "learned_preferences": len(learned),
+        "channels": sorted({channel for item in authored + preferences + lessons + learned
                             for channel in [_channel(item)] if channel}),
     }
     rated = [item for item in evaluations if item.get("provider") in LIVE_PROVIDERS and item.get("status") == "rated"]
@@ -68,13 +70,13 @@ def build_voice_confidence(samples, feedback, language_lessons=(), evaluations=(
         "correction_checks": sum(item.get("provider") in LIVE_PROVIDERS and item.get("status") == "rated"
                                  for item in quality_checks),
     }
-    saved = bool(authored or preferences or lessons)
+    saved = bool(authored or preferences or lessons or learned)
     compared = saved and bool(rated)
     across_contexts = compared and len(cases) >= 3 and len(validation["channels"]) >= 2
     milestones = [
         {"id": "evidence", "label": "Evidence saved", "complete": saved,
-         "detail": "%d unique authored samples, %d saved practice preferences, %d active lessons."
-                   % (evidence["authored_samples"], evidence["feedback"], evidence["lessons"])},
+         "detail": "%d unique authored samples, %d saved practice preferences, %d active lessons, %d applicable learned preferences."
+                   % (evidence["authored_samples"], evidence["feedback"], evidence["lessons"], evidence["learned_preferences"])},
         {"id": "comparison", "label": "Blind voice comparison", "complete": compared,
          "detail": "%d rated live-model comparisons: %d calibrated picks, %d baseline picks, %d ties, %d neither; %d factual flags."
                    % (validation["rated_real"], validation["calibrated_wins"], validation["baseline_wins"],

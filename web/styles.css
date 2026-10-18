@@ -385,6 +385,11 @@ input[type=range]::-moz-range-thumb { height: 10px; width: 10px; border-radius: 
 .document-issues li + li { margin-top: 12px; }
 .document-issues p { margin: 3px 0; }
 .document-issues strong { font-size: 10px; font-weight: 600; text-transform: capitalize; color: #7c5a2d; }
+.document-style-suggestions { border-top: 1px solid var(--line, #d5dbd1); margin-top: 18px; padding-top: 15px; }
+.document-style-suggestions h4 { font-size: 12px; margin: 0 0 6px; }
+.document-style-suggestions ul { padding-left: 16px; font-size: 12px; line-height: 1.65; }
+.document-style-suggestions li + li { margin-top: 15px; }
+.document-style-suggestions p { margin: 5px 0; }
 .document-stale { font-size: 11px; color: #755b31; border-left: 2px solid #bb9b61; padding-left: 10px; margin: 14px 0 0; }
 .document-review-actions { margin-top: 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .document-review-actions .helper { flex: 1; min-width: 150px; margin: 0; }
